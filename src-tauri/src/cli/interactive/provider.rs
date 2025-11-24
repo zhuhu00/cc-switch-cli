@@ -86,18 +86,38 @@ fn view_current_provider(
     let providers = ProviderService::list(state, app_type.clone())?;
     if let Some(provider) = providers.get(current_id) {
         println!("\n{}", highlight(texts::current_provider_details()));
-        println!("{}", "─".repeat(60));
-        println!("ID:       {}", current_id);
-        println!(
-            "{}: {}",
-            texts::header_name().trim_end_matches(':'),
-            provider.name
-        );
+        println!("{}", "═".repeat(60));
 
-        // Extract and display API endpoint
-        let api_url = extract_api_url(&provider.settings_config, app_type)
-            .unwrap_or_else(|| "N/A".to_string());
-        println!("API URL:  {}", api_url);
+        // 基本信息
+        println!("\n{}", highlight("基本信息 / Basic Info"));
+        println!("  ID:       {}", current_id);
+        println!("  名称:     {}", provider.name);
+        println!("  应用:     {}", app_type.as_str());
+
+        // 仅 Claude 应用显示详细配置
+        if matches!(app_type, AppType::Claude) {
+            let config = extract_claude_config(&provider.settings_config);
+
+            // API 配置
+            println!("\n{}", highlight("API 配置 / API Configuration"));
+            println!("  Base URL: {}", config.base_url.unwrap_or_else(|| "N/A".to_string()));
+            println!("  API Key:  {}", config.api_key.unwrap_or_else(|| "N/A".to_string()));
+
+            // 模型配置
+            println!("\n{}", highlight("模型配置 / Model Configuration"));
+            println!("  主模型:   {}", config.model.unwrap_or_else(|| "default".to_string()));
+            println!("  Haiku:    {}", config.haiku_model.unwrap_or_else(|| "default".to_string()));
+            println!("  Sonnet:   {}", config.sonnet_model.unwrap_or_else(|| "default".to_string()));
+            println!("  Opus:     {}", config.opus_model.unwrap_or_else(|| "default".to_string()));
+        } else {
+            // Codex/Gemini 应用只显示 API URL
+            println!("\n{}", highlight("API 配置 / API Configuration"));
+            let api_url = extract_api_url(&provider.settings_config, app_type)
+                .unwrap_or_else(|| "N/A".to_string());
+            println!("  API URL:  {}", api_url);
+        }
+
+        println!("\n{}", "─".repeat(60));
     }
     Ok(())
 }
@@ -242,4 +262,70 @@ fn add_provider_interactive(_app_type: &AppType) -> Result<(), AppError> {
     pause();
 
     Ok(())
+}
+
+/// Claude 配置信息
+#[derive(Default)]
+struct ClaudeConfig {
+    api_key: Option<String>,
+    base_url: Option<String>,
+    model: Option<String>,
+    haiku_model: Option<String>,
+    sonnet_model: Option<String>,
+    opus_model: Option<String>,
+}
+
+/// 提取 Claude 配置信息
+fn extract_claude_config(settings_config: &serde_json::Value) -> ClaudeConfig {
+    let env = settings_config
+        .get("env")
+        .and_then(|v| v.as_object());
+
+    if let Some(env) = env {
+        ClaudeConfig {
+            api_key: env.get("ANTHROPIC_AUTH_TOKEN")
+                .or_else(|| env.get("ANTHROPIC_API_KEY"))
+                .and_then(|v| v.as_str())
+                .map(|s| mask_api_key(s)),
+            base_url: env.get("ANTHROPIC_BASE_URL")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            model: env.get("ANTHROPIC_MODEL")
+                .and_then(|v| v.as_str())
+                .map(|s| simplify_model_name(s)),
+            haiku_model: env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                .and_then(|v| v.as_str())
+                .map(|s| simplify_model_name(s)),
+            sonnet_model: env.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
+                .and_then(|v| v.as_str())
+                .map(|s| simplify_model_name(s)),
+            opus_model: env.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
+                .and_then(|v| v.as_str())
+                .map(|s| simplify_model_name(s)),
+        }
+    } else {
+        ClaudeConfig::default()
+    }
+}
+
+/// 将 API Key 脱敏显示（显示前8位 + ...）
+fn mask_api_key(key: &str) -> String {
+    if key.len() > 8 {
+        format!("{}...", &key[..8])
+    } else {
+        key.to_string()
+    }
+}
+
+/// 简化模型名称（去掉日期后缀）
+/// 例如：claude-3-5-sonnet-20241022 -> claude-3-5-sonnet
+fn simplify_model_name(name: &str) -> String {
+    // 移除末尾的日期格式（8位数字）
+    if let Some(pos) = name.rfind('-') {
+        let suffix = &name[pos + 1..];
+        if suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_digit()) {
+            return name[..pos].to_string();
+        }
+    }
+    name.to_string()
 }

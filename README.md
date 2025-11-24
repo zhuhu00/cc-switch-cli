@@ -84,9 +84,14 @@ Manage Model Context Protocol servers across Claude/Codex/Gemini.
 
 ```bash
 cc-switch mcp list                   # List all MCP servers
+cc-switch mcp add                    # Add new MCP server (interactive)
+cc-switch mcp edit <id>              # Edit MCP server
+cc-switch mcp delete <id>            # Delete MCP server
 cc-switch mcp enable <id> --app claude   # Enable for specific app
-cc-switch mcp sync                   # Sync all enabled servers
-cc-switch mcp import --app claude    # Import from config
+cc-switch mcp disable <id> --app claude  # Disable for specific app
+cc-switch mcp validate <command>     # Validate command in PATH
+cc-switch mcp sync                   # Sync to live files
+cc-switch mcp import --app claude    # Import from live config
 ```
 
 ### 💬 Prompts Management
@@ -97,20 +102,54 @@ Manage system prompt presets for AI coding assistants.
 
 ```bash
 cc-switch prompts list               # List prompt presets
+cc-switch prompts current            # Show current active prompt
 cc-switch prompts activate <id>      # Activate prompt
+cc-switch prompts create             # Create new prompt preset
+cc-switch prompts edit <id>          # Edit prompt preset
 cc-switch prompts show <id>          # Display full content
 cc-switch prompts delete <id>        # Delete prompt
+```
+
+### 🎯 Skills Management
+
+Manage and extend Claude Code/Codex/Gemini capabilities with community skills.
+
+**Features:** Search skill marketplace, install/uninstall, repository management, skill information.
+
+```bash
+cc-switch skills list                # List installed skills
+cc-switch skills search <query>      # Search available skills
+cc-switch skills install <name>      # Install a skill
+cc-switch skills uninstall <name>    # Uninstall a skill
+cc-switch skills info <name>         # Show skill information
+cc-switch skills repos               # Manage skill repositories
 ```
 
 ### ⚙️ Configuration Management
 
 Manage configuration backups, imports, and exports.
 
+**Features:** Custom backup naming, interactive backup selection, automatic rotation (keep 10), import/export.
+
 ```bash
 cc-switch config show                # Display configuration
-cc-switch config backup              # Create backup
-cc-switch config export <path>       # Export configuration
-cc-switch config import <path>       # Import configuration
+cc-switch config path                # Show config file paths
+cc-switch config validate            # Validate config file
+
+# Backup
+cc-switch config backup              # Create backup (auto-named)
+cc-switch config backup --name my-backup  # Create backup with custom name
+
+# Restore
+cc-switch config restore             # Interactive: select from backup list
+cc-switch config restore --backup <id>    # Restore specific backup by ID
+cc-switch config restore --file <path>    # Restore from external file
+
+# Import/Export
+cc-switch config export <path>       # Export to external file
+cc-switch config import <path>       # Import from external file
+
+cc-switch config reset               # Reset to default configuration
 ```
 
 ### 🌐 Multi-language Support
@@ -122,12 +161,22 @@ Interactive mode supports English and Chinese, language settings are automatical
 
 ### 🔧 Utilities
 
-Shell completions, environment checks, application context switching, and other utilities.
+Shell completions, environment management, application context switching, and other utilities.
 
 ```bash
+# Shell completions
 cc-switch completions <shell>        # Generate shell completions (bash/zsh/fish/powershell)
-cc-switch env check                  # Check for conflicts
-cc-switch app switch <app>           # Switch application context
+
+# Environment management
+cc-switch env check                  # Check for environment conflicts
+cc-switch env list                   # List environment variables
+cc-switch env set <key> <value>      # Set environment variable
+cc-switch env unset <key>            # Unset environment variable
+
+# Application context
+cc-switch app current                # Show current application
+cc-switch app use <app>              # Switch to specific app
+cc-switch app list                   # List all supported apps
 ```
 
 ---

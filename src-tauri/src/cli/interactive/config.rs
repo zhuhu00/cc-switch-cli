@@ -49,10 +49,7 @@ pub fn manage_config_menu() -> Result<(), AppError> {
         } else if choice == texts::config_backup() {
             backup_config_interactive()?;
         } else if choice == texts::config_restore() {
-            let path = Text::new(texts::enter_restore_path())
-                .prompt()
-                .map_err(|e| AppError::Message(format!("Input failed: {}", e)))?;
-            restore_config_interactive(&path)?;
+            restore_config_interactive()?;
         } else if choice == texts::config_validate() {
             validate_config_interactive()?;
         } else if choice == texts::config_reset() {
@@ -158,22 +155,84 @@ fn import_config_interactive(path: &str) -> Result<(), AppError> {
 }
 
 fn backup_config_interactive() -> Result<(), AppError> {
+    println!("\n{}", highlight(texts::config_backup().trim_start_matches("💾 ")));
+    println!("{}", "─".repeat(60));
+
+    // 询问是否使用自定义名称
+    let use_custom_name = Confirm::new("是否使用自定义备份名称？")
+        .with_default(false)
+        .with_help_message("自定义名称可以帮助您识别备份用途，如 'before-update'")
+        .prompt()
+        .map_err(|_| AppError::Message("Confirmation failed".to_string()))?;
+
+    let custom_name = if use_custom_name {
+        Some(
+            Text::new("请输入备份名称：")
+                .with_help_message("仅支持字母、数字、短横线和下划线")
+                .prompt()
+                .map_err(|e| AppError::Message(format!("Input failed: {}", e)))?
+                .trim()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
     let config_path = get_app_config_path();
-    let backup_id = ConfigService::create_backup(&config_path)?;
+    let backup_id = ConfigService::create_backup(&config_path, custom_name)?;
 
     println!("\n{}", success(&texts::backup_created(&backup_id)));
+
+    // 显示备份文件完整路径
+    let backup_dir = config_path.parent().unwrap().join("backups");
+    let backup_file = backup_dir.join(format!("{}.json", backup_id));
+    println!("{}", info(&format!("位置: {}", backup_file.display())));
+
     pause();
     Ok(())
 }
 
-fn restore_config_interactive(path: &str) -> Result<(), AppError> {
-    let file_path = Path::new(path);
+fn restore_config_interactive() -> Result<(), AppError> {
+    println!("\n{}", highlight(texts::config_restore().trim_start_matches("♻️  ")));
+    println!("{}", "─".repeat(60));
 
-    if !file_path.exists() {
-        return Err(AppError::Message(format!("Backup file not found: {}", path)));
+    // 获取备份列表
+    let config_path = get_app_config_path();
+    let backups = ConfigService::list_backups(&config_path)?;
+
+    if backups.is_empty() {
+        println!("\n{}", info("暂无可用备份"));
+        println!("{}", info("提示：使用 '💾 备份配置' 创建备份"));
+        pause();
+        return Ok(());
     }
 
-    let confirm = Confirm::new(texts::confirm_restore())
+    // 显示备份列表供选择
+    println!("\n找到 {} 个备份：", backups.len());
+    println!();
+
+    let choices: Vec<String> = backups
+        .iter()
+        .map(|b| format!("{} - {}", b.display_name, b.id))
+        .collect();
+
+    let selection = Select::new("选择要恢复的备份：", choices)
+        .prompt()
+        .map_err(|_| AppError::Message("Selection cancelled".to_string()))?;
+
+    // 从选择中提取备份 ID
+    let selected_backup = backups
+        .iter()
+        .find(|b| selection.contains(&b.id))
+        .ok_or_else(|| AppError::Message("无效的选择".to_string()))?;
+
+    println!();
+    println!("{}", highlight("警告："));
+    println!("这将使用所选备份替换当前配置");
+    println!("当前配置会先自动备份");
+    println!();
+
+    let confirm = Confirm::new("确认恢复？")
         .with_default(false)
         .prompt()
         .map_err(|_| AppError::Message("Confirmation failed".to_string()))?;
@@ -185,10 +244,14 @@ fn restore_config_interactive(path: &str) -> Result<(), AppError> {
     }
 
     let state = get_state()?;
-    let backup_id = ConfigService::import_config_from_path(file_path, &state)?;
+    let pre_restore_backup = ConfigService::restore_from_backup_id(&selected_backup.id, &state)?;
 
-    println!("\n{}", success(&texts::restored_from(path)));
-    println!("{}", info(&format!("Previous config backed up: {}", backup_id)));
+    println!("\n{}", success(&format!("✓ 已从备份恢复: {}", selected_backup.display_name)));
+    if !pre_restore_backup.is_empty() {
+        println!("{}", info(&format!("  恢复前配置已备份: {}", pre_restore_backup)));
+    }
+    println!("\n{}", info("注意：重启 CLI 客户端以应用更改"));
+
     pause();
     Ok(())
 }
@@ -243,7 +306,7 @@ fn reset_config_interactive() -> Result<(), AppError> {
 
     let config_path = get_app_config_path();
 
-    let backup_id = ConfigService::create_backup(&config_path)?;
+    let backup_id = ConfigService::create_backup(&config_path, None)?;
 
     if config_path.exists() {
         std::fs::remove_file(&config_path)

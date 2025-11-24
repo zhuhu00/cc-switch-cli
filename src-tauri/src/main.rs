@@ -7,17 +7,11 @@ fn main() {
     // 解析命令行参数
     let cli = Cli::parse();
 
-    // 初始化日志（交互模式下禁用，避免干扰 UI）
-    let log_level = if matches!(cli.command, None | Some(Commands::Interactive)) {
-        if cli.verbose {
-            "info"
-        } else {
-            "error" // 交互模式下只显示错误日志
-        }
-    } else if cli.verbose {
+    // 初始化日志（交互模式和命令行模式都避免干扰输出）
+    let log_level = if cli.verbose {
         "debug"
     } else {
-        "info"
+        "error" // 默认只显示错误日志，避免 INFO 日志干扰命令输出
     };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level)).init();
 

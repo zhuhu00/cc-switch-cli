@@ -84,9 +84,14 @@ cc-switch provider speedtest <id>    # 测试 API 延迟
 
 ```bash
 cc-switch mcp list                   # 列出所有 MCP 服务器
+cc-switch mcp add                    # 添加新 MCP 服务器（交互式）
+cc-switch mcp edit <id>              # 编辑 MCP 服务器
+cc-switch mcp delete <id>            # 删除 MCP 服务器
 cc-switch mcp enable <id> --app claude   # 为特定应用启用
-cc-switch mcp sync                   # 同步所有已启用服务器
-cc-switch mcp import --app claude    # 从配置导入
+cc-switch mcp disable <id> --app claude  # 为特定应用禁用
+cc-switch mcp validate <command>     # 验证命令在 PATH 中
+cc-switch mcp sync                   # 同步到实时文件
+cc-switch mcp import --app claude    # 从实时配置导入
 ```
 
 ### 💬 Prompts 管理
@@ -97,20 +102,54 @@ cc-switch mcp import --app claude    # 从配置导入
 
 ```bash
 cc-switch prompts list               # 列出提示词预设
+cc-switch prompts current            # 显示当前活动提示词
 cc-switch prompts activate <id>      # 激活提示词
+cc-switch prompts create             # 创建新提示词预设
+cc-switch prompts edit <id>          # 编辑提示词预设
 cc-switch prompts show <id>          # 显示完整内容
 cc-switch prompts delete <id>        # 删除提示词
+```
+
+### 🎯 Skills 管理
+
+通过社区技能扩展 Claude Code/Codex/Gemini 的能力。
+
+**功能：** 搜索技能市场、安装/卸载、仓库管理、技能信息查看。
+
+```bash
+cc-switch skills list                # 列出已安装技能
+cc-switch skills search <query>      # 搜索可用技能
+cc-switch skills install <name>      # 安装技能
+cc-switch skills uninstall <name>    # 卸载技能
+cc-switch skills info <name>         # 显示技能信息
+cc-switch skills repos               # 管理技能仓库
 ```
 
 ### ⚙️ 配置管理
 
 管理配置文件的备份、导入和导出。
 
+**功能：** 自定义备份命名、交互式备份选择、自动轮换（保留 10 个）、导入/导出。
+
 ```bash
 cc-switch config show                # 显示配置
-cc-switch config backup              # 创建备份
-cc-switch config export <path>       # 导出配置
-cc-switch config import <path>       # 导入配置
+cc-switch config path                # 显示配置文件路径
+cc-switch config validate            # 验证配置文件
+
+# 备份
+cc-switch config backup              # 创建备份（自动命名）
+cc-switch config backup --name my-backup  # 创建备份（自定义名称）
+
+# 恢复
+cc-switch config restore             # 交互式：从备份列表选择
+cc-switch config restore --backup <id>    # 通过 ID 恢复特定备份
+cc-switch config restore --file <path>    # 从外部文件恢复
+
+# 导入/导出
+cc-switch config export <path>       # 导出到外部文件
+cc-switch config import <path>       # 从外部文件导入
+
+cc-switch config reset               # 重置为默认配置
 ```
 
 ### 🌐 多语言支持
@@ -122,12 +161,22 @@ cc-switch config import <path>       # 导入配置
 
 ### 🔧 实用工具
 
-Shell 补全、环境检查、应用上下文切换等实用功能。
+Shell 补全、环境管理、应用上下文切换等实用功能。
 
 ```bash
+# Shell 补全
 cc-switch completions <shell>        # 生成 shell 补全（bash/zsh/fish/powershell）
-cc-switch env check                  # 检查冲突
-cc-switch app switch <app>           # 切换应用上下文
+
+# 环境管理
+cc-switch env check                  # 检查环境冲突
+cc-switch env list                   # 列出环境变量
+cc-switch env set <key> <value>      # 设置环境变量
+cc-switch env unset <key>            # 取消设置环境变量
+
+# 应用上下文
+cc-switch app current                # 显示当前应用
+cc-switch app use <app>              # 切换到特定应用
+cc-switch app list                   # 列出所有支持的应用
 ```
 
 ---

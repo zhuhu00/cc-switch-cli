@@ -1,6 +1,6 @@
 use clap::Subcommand;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::app_config::MultiAppConfig;
@@ -26,11 +26,20 @@ pub enum ConfigCommand {
         file: PathBuf,
     },
     /// Create a backup of current configuration
-    Backup,
+    Backup {
+        /// Optional custom name for the backup
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Restore from a backup
     Restore {
-        /// Backup file path
-        file: PathBuf,
+        /// Backup ID to restore (from list)
+        #[arg(long, conflicts_with = "file")]
+        backup: Option<String>,
+
+        /// External file path to restore from
+        #[arg(long, conflicts_with = "backup")]
+        file: Option<PathBuf>,
     },
     /// Validate configuration file
     Validate,
@@ -44,8 +53,8 @@ pub fn execute(cmd: ConfigCommand) -> Result<(), AppError> {
         ConfigCommand::Path => show_path(),
         ConfigCommand::Export { file } => export_config(&file),
         ConfigCommand::Import { file } => import_config(&file),
-        ConfigCommand::Backup => backup_config(),
-        ConfigCommand::Restore { file } => restore_config(&file),
+        ConfigCommand::Backup { name } => backup_config(name.as_deref()),
+        ConfigCommand::Restore { backup, file } => restore_config(backup.as_deref(), file.as_deref()),
         ConfigCommand::Validate => validate_config(),
         ConfigCommand::Reset => reset_config(),
     }
@@ -181,7 +190,7 @@ fn import_config(file: &PathBuf) -> Result<(), AppError> {
     Ok(())
 }
 
-fn backup_config() -> Result<(), AppError> {
+fn backup_config(custom_name: Option<&str>) -> Result<(), AppError> {
     let config_path = crate::config::get_app_config_path();
 
     if !config_path.exists() {
@@ -190,9 +199,13 @@ fn backup_config() -> Result<(), AppError> {
         return Ok(());
     }
 
-    println!("{}", info("Creating backup of current configuration..."));
+    if let Some(name) = custom_name {
+        println!("{}", info(&format!("Creating backup with name '{}'...", name)));
+    } else {
+        println!("{}", info("Creating backup of current configuration..."));
+    }
 
-    let backup_id = ConfigService::create_backup(&config_path)?;
+    let backup_id = ConfigService::create_backup(&config_path, custom_name.map(|s| s.to_string()))?;
 
     if backup_id.is_empty() {
         println!("{}", error("Failed to create backup."));
@@ -207,23 +220,112 @@ fn backup_config() -> Result<(), AppError> {
     Ok(())
 }
 
-fn restore_config(file: &PathBuf) -> Result<(), AppError> {
-    println!("{}", info(&format!("Restoring configuration from {}...", file.display())));
+fn restore_config(backup_id: Option<&str>, file_path: Option<&Path>) -> Result<(), AppError> {
+    let config_path = crate::config::get_app_config_path();
 
-    // Check if backup file exists
-    if !file.exists() {
-        return Err(AppError::Message(format!("Backup file '{}' not found", file.display())));
+    // 情况1：指定了备份 ID
+    if let Some(id) = backup_id {
+        println!("{}", info(&format!("Restoring from backup '{}'...", id)));
+
+        let confirm = inquire::Confirm::new("This will replace your current configuration. Continue?")
+            .with_default(false)
+            .prompt()
+            .map_err(|e| AppError::Message(format!("Prompt failed: {}", e)))?;
+
+        if !confirm {
+            println!("{}", info("Cancelled."));
+            return Ok(());
+        }
+
+        let state = get_state()?;
+        let pre_restore_backup = ConfigService::restore_from_backup_id(id, &state)?;
+
+        println!("{}", success(&format!("✓ Configuration restored from backup '{}'", id)));
+        if !pre_restore_backup.is_empty() {
+            println!("{}", info(&format!("  Pre-restore backup: {}", pre_restore_backup)));
+        }
+        println!();
+        println!("{}", info("Note: Restart your CLI clients to apply the changes."));
+
+        return Ok(());
     }
 
-    // Validate the backup file
-    let content = fs::read_to_string(file).map_err(|e| AppError::io(file, e))?;
-    let _: MultiAppConfig = serde_json::from_str(&content)
-        .map_err(|e| AppError::Message(format!("Invalid backup file: {}", e)))?;
+    // 情况2：指定了文件路径
+    if let Some(file) = file_path {
+        println!("{}", info(&format!("Restoring configuration from {}...", file.display())));
 
-    // Confirm restore
+        if !file.exists() {
+            return Err(AppError::Message(format!("File '{}' not found", file.display())));
+        }
+
+        let content = fs::read_to_string(file).map_err(|e| AppError::io(file, e))?;
+        let _: MultiAppConfig = serde_json::from_str(&content)
+            .map_err(|e| AppError::Message(format!("Invalid configuration file: {}", e)))?;
+
+        println!();
+        println!("{}", highlight("Warning:"));
+        println!("This will replace your current configuration with the file.");
+        println!("A backup of the current state will be created first.");
+        println!();
+
+        let confirm = inquire::Confirm::new("Continue with restore?")
+            .with_default(false)
+            .prompt()
+            .map_err(|e| AppError::Message(format!("Prompt failed: {}", e)))?;
+
+        if !confirm {
+            println!("{}", info("Cancelled."));
+            return Ok(());
+        }
+
+        let pre_restore_backup = ConfigService::create_backup(&config_path, None)?;
+        let state = get_state()?;
+        let _ = ConfigService::import_config_from_path(file, &state)?;
+
+        println!("{}", success(&format!("✓ Configuration restored from {}", file.display())));
+        if !pre_restore_backup.is_empty() {
+            println!("{}", info(&format!("  Pre-restore backup: {}", pre_restore_backup)));
+        }
+        println!();
+        println!("{}", info("Note: Restart your CLI clients to apply the changes."));
+
+        return Ok(());
+    }
+
+    // 情况3：无参数，显示交互式列表
+    println!("{}", highlight("Available Backups"));
+    println!("{}", "=".repeat(50));
+
+    let backups = ConfigService::list_backups(&config_path)?;
+
+    if backups.is_empty() {
+        println!();
+        println!("{}", info("No backups found."));
+        println!("{}", info("Create a backup first: cc-switch config backup"));
+        return Ok(());
+    }
+
+    println!();
+    println!("Found {} backup(s):", backups.len());
+    println!();
+
+    let choices: Vec<String> = backups
+        .iter()
+        .map(|b| format!("{} - {}", b.display_name, b.id))
+        .collect();
+
+    let selection = inquire::Select::new("Select backup to restore:", choices)
+        .prompt()
+        .map_err(|_| AppError::Message("Selection cancelled".to_string()))?;
+
+    let selected_backup = backups
+        .iter()
+        .find(|b| selection.contains(&b.id))
+        .ok_or_else(|| AppError::Message("Invalid selection".to_string()))?;
+
     println!();
     println!("{}", highlight("Warning:"));
-    println!("This will replace your current configuration with the backup.");
+    println!("This will replace your current configuration with the selected backup.");
     println!("A backup of the current state will be created first.");
     println!();
 
@@ -237,15 +339,10 @@ fn restore_config(file: &PathBuf) -> Result<(), AppError> {
         return Ok(());
     }
 
-    // Create a backup before restoring
-    let config_path = crate::config::get_app_config_path();
-    let pre_restore_backup = ConfigService::create_backup(&config_path)?;
-
-    // Restore from backup (same as import)
     let state = get_state()?;
-    let _ = ConfigService::import_config_from_path(file, &state)?;
+    let pre_restore_backup = ConfigService::restore_from_backup_id(&selected_backup.id, &state)?;
 
-    println!("{}", success(&format!("✓ Configuration restored from {}", file.display())));
+    println!("{}", success(&format!("✓ Configuration restored from: {}", selected_backup.display_name)));
     if !pre_restore_backup.is_empty() {
         println!("{}", info(&format!("  Pre-restore backup: {}", pre_restore_backup)));
     }
@@ -326,7 +423,7 @@ fn reset_config() -> Result<(), AppError> {
 
     // Create a backup before reset
     let config_path = crate::config::get_app_config_path();
-    let backup_id = ConfigService::create_backup(&config_path)?;
+    let backup_id = ConfigService::create_backup(&config_path, None)?;
 
     // Delete the current config file
     if config_path.exists() {

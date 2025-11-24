@@ -68,7 +68,7 @@ fn list_providers(app_type: AppType) -> Result<(), AppError> {
     let state = get_state()?;
     let app_str = app_type.as_str().to_string();
     let providers = ProviderService::list(&state, app_type.clone())?;
-    let current_id = ProviderService::current(&state, app_type)?;
+    let current_id = ProviderService::current(&state, app_type.clone())?;
 
     if providers.is_empty() {
         println!("{}", info("No providers found."));
@@ -78,7 +78,7 @@ fn list_providers(app_type: AppType) -> Result<(), AppError> {
 
     // 创建表格
     let mut table = create_table();
-    table.set_header(vec!["", "ID", "Name", "Category", "Created"]);
+    table.set_header(vec!["", "Name", "API URL"]);
 
     // 按创建时间排序
     let mut provider_list: Vec<_> = providers.into_iter().collect();
@@ -94,36 +94,17 @@ fn list_providers(app_type: AppType) -> Result<(), AppError> {
 
     for (id, provider) in provider_list {
         let current_marker = if id == current_id { "✓" } else { "" };
-        let created = provider.created_at
-            .map(|ts| {
-                use chrono::{DateTime, Utc};
-                DateTime::<Utc>::from_timestamp(ts, 0)
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                    .unwrap_or_else(|| "Unknown".to_string())
-            })
-            .unwrap_or_else(|| "Unknown".to_string());
+        let api_url = extract_api_url(&provider.settings_config, &app_type)
+            .unwrap_or_else(|| "N/A".to_string());
 
-        let category = provider.category.as_deref().unwrap_or("unknown");
-
-        let row = if id == current_id {
-            vec![
-                highlight(current_marker),
-                highlight(&id),
-                highlight(&provider.name),
-                category.to_string(),
-                created,
-            ]
+        // 当前 provider 的名称前加 * 标记，与交互式模式保持一致
+        let name = if id == current_id {
+            format!("* {}", provider.name)
         } else {
-            vec![
-                current_marker.to_string(),
-                id.clone(),
-                provider.name.clone(),
-                category.to_string(),
-                created,
-            ]
+            format!("  {}", provider.name)
         };
 
-        table.add_row(row);
+        table.add_row(vec![current_marker.to_string(), name, api_url]);
     }
 
     println!("{}", table);
@@ -135,28 +116,45 @@ fn list_providers(app_type: AppType) -> Result<(), AppError> {
 
 fn show_current(app_type: AppType) -> Result<(), AppError> {
     let state = get_state()?;
-    let app_str = app_type.as_str().to_string();
     let current_id = ProviderService::current(&state, app_type.clone())?;
-    let providers = ProviderService::list(&state, app_type)?;
+    let providers = ProviderService::list(&state, app_type.clone())?;
 
     let provider = providers.get(&current_id)
         .ok_or_else(|| AppError::Message(format!("Current provider '{}' not found", current_id)))?;
 
-    let created = provider.created_at
-        .and_then(|ts| {
-            use chrono::{DateTime, Utc};
-            DateTime::<Utc>::from_timestamp(ts, 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-        })
-        .unwrap_or_else(|| "Unknown".to_string());
-
     println!("{}", highlight("Current Provider"));
-    println!("{}", "=".repeat(50));
-    println!("ID:       {}", current_id);
-    println!("Name:     {}", provider.name);
-    println!("Category: {}", provider.category.as_deref().unwrap_or("unknown"));
-    println!("App:      {}", app_str);
-    println!("Created:  {}", created);
+    println!("{}", "═".repeat(60));
+
+    // 基本信息
+    println!("\n{}", highlight("基本信息 / Basic Info"));
+    println!("  ID:       {}", current_id);
+    println!("  名称:     {}", provider.name);
+    println!("  应用:     {}", app_type.as_str());
+
+    // 仅 Claude 应用显示详细配置
+    if matches!(app_type, AppType::Claude) {
+        let config = extract_claude_config(&provider.settings_config);
+
+        // API 配置
+        println!("\n{}", highlight("API 配置 / API Configuration"));
+        println!("  Base URL: {}", config.base_url.unwrap_or_else(|| "N/A".to_string()));
+        println!("  API Key:  {}", config.api_key.unwrap_or_else(|| "N/A".to_string()));
+
+        // 模型配置
+        println!("\n{}", highlight("模型配置 / Model Configuration"));
+        println!("  主模型:   {}", config.model.unwrap_or_else(|| "default".to_string()));
+        println!("  Haiku:    {}", config.haiku_model.unwrap_or_else(|| "default".to_string()));
+        println!("  Sonnet:   {}", config.sonnet_model.unwrap_or_else(|| "default".to_string()));
+        println!("  Opus:     {}", config.opus_model.unwrap_or_else(|| "default".to_string()));
+    } else {
+        // Codex/Gemini 应用只显示 API URL
+        println!("\n{}", highlight("API 配置 / API Configuration"));
+        let api_url = extract_api_url(&provider.settings_config, &app_type)
+            .unwrap_or_else(|| "N/A".to_string());
+        println!("  API URL:  {}", api_url);
+    }
+
+    println!("\n{}", "─".repeat(60));
 
     Ok(())
 }
@@ -220,13 +218,6 @@ fn add_provider(_app_type: AppType) -> Result<(), AppError> {
         .prompt()
         .map_err(|e| AppError::Message(format!("Prompt failed: {}", e)))?;
 
-    let _category = inquire::Select::new(
-        "Category:",
-        vec!["official", "custom", "packycode", "other"],
-    )
-    .prompt()
-    .map_err(|e| AppError::Message(format!("Prompt failed: {}", e)))?;
-
     println!("\n{}", info("Note: Provider configuration is complex and varies by app type."));
     println!("{}", info("For now, please use the config file directly to add detailed settings."));
     println!("\n{}", error("Interactive provider creation is not yet fully implemented."));
@@ -252,4 +243,104 @@ fn speedtest_provider(_app_type: AppType, id: &str) -> Result<(), AppError> {
     println!("{}", info(&format!("Testing provider '{}'...", id)));
     println!("{}", error("Speedtest is not yet implemented."));
     Ok(())
+}
+
+fn extract_api_url(settings_config: &serde_json::Value, app_type: &AppType) -> Option<String> {
+    match app_type {
+        AppType::Claude => {
+            settings_config
+                .get("env")?
+                .get("ANTHROPIC_BASE_URL")?
+                .as_str()
+                .map(|s| s.to_string())
+        }
+        AppType::Codex => {
+            if let Some(config_str) = settings_config.get("config")?.as_str() {
+                for line in config_str.lines() {
+                    let line = line.trim();
+                    if line.starts_with("base_url") {
+                        if let Some(url_part) = line.split('=').nth(1) {
+                            let url = url_part.trim().trim_matches('"').trim_matches('\'');
+                            return Some(url.to_string());
+                        }
+                    }
+                }
+            }
+            None
+        }
+        AppType::Gemini => {
+            settings_config
+                .get("env")?
+                .get("GEMINI_BASE_URL")
+                .or_else(|| settings_config.get("env")?.get("BASE_URL"))?
+                .as_str()
+                .map(|s| s.to_string())
+        }
+    }
+}
+
+/// Claude 配置信息
+#[derive(Default)]
+struct ClaudeConfig {
+    api_key: Option<String>,
+    base_url: Option<String>,
+    model: Option<String>,
+    haiku_model: Option<String>,
+    sonnet_model: Option<String>,
+    opus_model: Option<String>,
+}
+
+/// 提取 Claude 配置信息
+fn extract_claude_config(settings_config: &serde_json::Value) -> ClaudeConfig {
+    let env = settings_config
+        .get("env")
+        .and_then(|v| v.as_object());
+
+    if let Some(env) = env {
+        ClaudeConfig {
+            api_key: env.get("ANTHROPIC_AUTH_TOKEN")
+                .or_else(|| env.get("ANTHROPIC_API_KEY"))
+                .and_then(|v| v.as_str())
+                .map(|s| mask_api_key(s)),
+            base_url: env.get("ANTHROPIC_BASE_URL")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            model: env.get("ANTHROPIC_MODEL")
+                .and_then(|v| v.as_str())
+                .map(|s| simplify_model_name(s)),
+            haiku_model: env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                .and_then(|v| v.as_str())
+                .map(|s| simplify_model_name(s)),
+            sonnet_model: env.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
+                .and_then(|v| v.as_str())
+                .map(|s| simplify_model_name(s)),
+            opus_model: env.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
+                .and_then(|v| v.as_str())
+                .map(|s| simplify_model_name(s)),
+        }
+    } else {
+        ClaudeConfig::default()
+    }
+}
+
+/// 将 API Key 脱敏显示（显示前8位 + ...）
+fn mask_api_key(key: &str) -> String {
+    if key.len() > 8 {
+        format!("{}...", &key[..8])
+    } else {
+        key.to_string()
+    }
+}
+
+/// 简化模型名称（去掉日期后缀）
+/// 例如：claude-3-5-sonnet-20241022 -> claude-3-5-sonnet
+fn simplify_model_name(name: &str) -> String {
+    // 移除末尾的日期格式（8位数字）
+    if let Some(pos) = name.rfind('-') {
+        let suffix = &name[pos + 1..];
+        if suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_digit()) {
+            return name[..pos].to_string();
+        }
+    }
+    name.to_string()
 }

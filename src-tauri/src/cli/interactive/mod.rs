@@ -151,7 +151,7 @@ fn view_current_config(app_type: &AppType) -> Result<(), AppError> {
     use utils::get_state;
 
     println!("\n{}", highlight(texts::current_configuration()));
-    println!("{}", "─".repeat(60));
+    println!("{}", "═".repeat(60));
 
     let state = get_state()?;
 
@@ -159,16 +159,11 @@ fn view_current_config(app_type: &AppType) -> Result<(), AppError> {
     let current_provider = ProviderService::current(&state, app_type.clone())?;
     let providers = ProviderService::list(&state, app_type.clone())?;
     if let Some(provider) = providers.get(&current_provider) {
-        println!("{}", highlight(texts::provider_label()));
-        println!(
-            "  {}: {}",
-            texts::header_name().trim_end_matches(':'),
-            provider.name
-        );
+        println!("\n{}", highlight(texts::provider_label()));
+        println!("  名称:     {}", provider.name);
         let api_url = provider::extract_api_url(&provider.settings_config, &app_type)
             .unwrap_or_else(|| "N/A".to_string());
-        println!("  API URL: {}", api_url);
-        println!();
+        println!("  API URL:  {}", api_url);
     }
 
     // MCP servers count
@@ -177,23 +172,22 @@ fn view_current_config(app_type: &AppType) -> Result<(), AppError> {
         .values()
         .filter(|s| s.apps.is_enabled_for(app_type))
         .count();
-    println!("{}", highlight(texts::mcp_servers_label()));
-    println!("  {}:   {}", texts::total(), mcp_servers.len());
-    println!("  {}: {}", texts::enabled(), enabled_count);
-    println!();
+    println!("\n{}", highlight(texts::mcp_servers_label()));
+    println!("  总计:     {}", mcp_servers.len());
+    println!("  启用:     {}", enabled_count);
 
     // Prompts
     let prompts = PromptService::get_prompts(&state, app_type.clone())?;
     let active_prompt = prompts.iter().find(|(_, p)| p.enabled);
-    println!("{}", highlight(texts::prompts_label()));
-    println!("  {}:  {}", texts::total(), prompts.len());
+    println!("\n{}", highlight(texts::prompts_label()));
+    println!("  总计:     {}", prompts.len());
     if let Some((_, p)) = active_prompt {
-        println!("  {}: {}", texts::active(), p.name);
+        println!("  活动:     {}", p.name);
     } else {
-        println!("  {}: {}", texts::active(), texts::none());
+        println!("  活动:     {}", texts::none());
     }
 
-    println!();
+    println!("\n{}", "─".repeat(60));
     pause();
 
     Ok(())
