@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.4] - 2026-01-06
+
+### Added
+
+- **Interactive**: Press `Esc` to go back to the previous step (no more “Selection cancelled” errors).
+
 ## [4.2.3] - 2026-01-06
 
 ### Fixed
