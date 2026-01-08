@@ -4,6 +4,9 @@ use std::sync::{OnceLock, RwLock};
 
 use crate::app_config::AppType;
 
+use inquire::set_global_render_config;
+use inquire::ui::{Color as InquireColor, RenderConfig, StyleSheet, Styled};
+
 static TUI_THEME_APP: OnceLock<RwLock<Option<AppType>>> = OnceLock::new();
 
 fn tui_theme_app_cell() -> &'static RwLock<Option<AppType>> {
@@ -14,6 +17,8 @@ pub fn set_tui_theme_app(app_type: Option<AppType>) {
     *tui_theme_app_cell()
         .write()
         .expect("tui theme app lock poisoned") = app_type;
+
+    apply_inquire_theme();
 }
 
 fn get_tui_theme_app() -> Option<AppType> {
@@ -21,6 +26,39 @@ fn get_tui_theme_app() -> Option<AppType> {
         .read()
         .expect("tui theme app lock poisoned")
         .clone()
+}
+
+fn inquire_color_for_app(app_type: &AppType) -> InquireColor {
+    match app_type {
+        AppType::Codex => InquireColor::LightGreen,
+        AppType::Claude => InquireColor::LightCyan,
+        AppType::Gemini => InquireColor::LightMagenta,
+    }
+}
+
+fn apply_inquire_theme() {
+    if std::env::var("NO_COLOR").is_ok() {
+        set_global_render_config(RenderConfig::empty());
+        return;
+    }
+
+    let Some(app_type) = get_tui_theme_app() else {
+        set_global_render_config(RenderConfig::default());
+        return;
+    };
+
+    let accent = inquire_color_for_app(&app_type);
+
+    let cfg = RenderConfig::default_colored()
+        .with_prompt_prefix(Styled::new("?").with_fg(accent))
+        .with_answered_prompt_prefix(Styled::new(">").with_fg(accent))
+        .with_highlighted_option_prefix(Styled::new(">").with_fg(accent))
+        .with_selected_option(Some(StyleSheet::new().with_fg(accent)))
+        .with_selected_checkbox(Styled::new("[x]").with_fg(accent))
+        .with_help_message(StyleSheet::new().with_fg(accent))
+        .with_answer(StyleSheet::new().with_fg(accent));
+
+    set_global_render_config(cfg);
 }
 
 pub fn success(text: &str) -> String {
@@ -42,8 +80,8 @@ pub fn info(text: &str) -> String {
 fn highlight_color_for_app(app_type: &AppType) -> Color {
     match app_type {
         AppType::Codex => Color::BrightGreen,
-        AppType::Claude => Color::BrightMagenta,
-        AppType::Gemini => Color::BrightCyan,
+        AppType::Claude => Color::BrightCyan,
+        AppType::Gemini => Color::BrightMagenta,
     }
 }
 
@@ -92,13 +130,13 @@ mod tests {
         set_tui_theme_app(Some(AppType::Claude));
         assert_eq!(
             highlight("x"),
-            "x".color(Color::BrightMagenta).bold().to_string()
+            "x".color(Color::BrightCyan).bold().to_string()
         );
 
         set_tui_theme_app(Some(AppType::Gemini));
         assert_eq!(
             highlight("x"),
-            "x".color(Color::BrightCyan).bold().to_string()
+            "x".color(Color::BrightMagenta).bold().to_string()
         );
     }
 }
