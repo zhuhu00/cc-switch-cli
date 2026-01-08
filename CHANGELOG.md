@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.6] - 2026-01-08
+
+### Fixed
+
+- **Codex**: Allow switching providers when `~/.codex/auth.json` is absent (credential store / keyring mode).
+
 ## [4.2.5] - 2026-01-08
 
 ### Added
