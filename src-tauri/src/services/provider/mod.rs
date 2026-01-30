@@ -1,21 +1,24 @@
+mod endpoints;
+mod gemini_auth;
+mod live;
 mod usage;
 
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::app_config::{AppType, MultiAppConfig};
 use crate::codex_config::{get_codex_auth_path, get_codex_config_path};
 use crate::config::{
     delete_file, get_claude_settings_path, get_provider_config_path, read_json_file,
-    write_json_file, write_text_file,
+    write_json_file,
 };
 use crate::error::AppError;
-use crate::provider::{Provider, ProviderMeta};
-use crate::settings::{self, CustomEndpoint};
+use crate::provider::Provider;
 use crate::store::AppState;
+
+use gemini_auth::GeminiAuthType;
+use live::LiveSnapshot;
 
 /// 供应商相关业务逻辑
 pub struct ProviderService;
@@ -30,21 +33,6 @@ fn generate_provider_id_from_name(name: &str) -> String {
 }
 
 #[derive(Clone)]
-enum LiveSnapshot {
-    Claude {
-        settings: Option<Value>,
-    },
-    Codex {
-        auth: Option<Value>,
-        config: Option<String>,
-    },
-    Gemini {
-        env: Option<HashMap<String, String>>, // 新增
-        config: Option<Value>,                // 新增：settings.json 内容
-    },
-}
-
-#[derive(Clone)]
 struct PostCommitAction {
     app_type: AppType,
     provider: Provider,
@@ -52,62 +40,6 @@ struct PostCommitAction {
     sync_mcp: bool,
     refresh_snapshot: bool,
     common_config_snippet: Option<String>,
-}
-
-impl LiveSnapshot {
-    fn restore(&self) -> Result<(), AppError> {
-        match self {
-            LiveSnapshot::Claude { settings } => {
-                let path = get_claude_settings_path();
-                if let Some(value) = settings {
-                    write_json_file(&path, value)?;
-                } else if path.exists() {
-                    delete_file(&path)?;
-                }
-            }
-            LiveSnapshot::Codex { auth, config } => {
-                let auth_path = get_codex_auth_path();
-                let config_path = get_codex_config_path();
-                if let Some(value) = auth {
-                    write_json_file(&auth_path, value)?;
-                } else if auth_path.exists() {
-                    delete_file(&auth_path)?;
-                }
-
-                if let Some(text) = config {
-                    write_text_file(&config_path, text)?;
-                } else if config_path.exists() {
-                    delete_file(&config_path)?;
-                }
-            }
-            LiveSnapshot::Gemini { env, .. } => {
-                // 新增
-                use crate::gemini_config::{
-                    get_gemini_env_path, get_gemini_settings_path, write_gemini_env_atomic,
-                };
-                let path = get_gemini_env_path();
-                if let Some(env_map) = env {
-                    write_gemini_env_atomic(env_map)?;
-                } else if path.exists() {
-                    delete_file(&path)?;
-                }
-
-                let settings_path = get_gemini_settings_path();
-                match self {
-                    LiveSnapshot::Gemini {
-                        config: Some(cfg), ..
-                    } => {
-                        write_json_file(&settings_path, cfg)?;
-                    }
-                    LiveSnapshot::Gemini { config: None, .. } if settings_path.exists() => {
-                        delete_file(&settings_path)?;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -912,25 +844,7 @@ fn strip_common_values(target: &mut Value, common: &Value) {
     }
 }
 
-/// Gemini 认证类型枚举
-///
-/// 区分 OAuth 和 API Key 两种认证方式
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GeminiAuthType {
-    /// Google 官方（使用 OAuth 认证）
-    GoogleOfficial,
-    /// API Key 认证（包括所有第三方供应商：PackyCode、Generic 等）
-    ApiKey,
-}
-
 impl ProviderService {
-    // 认证类型常量
-    const API_KEY_SECURITY_SELECTED_TYPE: &'static str = "gemini-api-key";
-    const GOOGLE_OAUTH_SECURITY_SELECTED_TYPE: &'static str = "oauth-personal";
-
-    // Partner Promotion Key 常量
-    const GOOGLE_OFFICIAL_PARTNER_KEY: &'static str = "google-official";
-
     fn parse_common_claude_config_snippet(snippet: &str) -> Result<Value, AppError> {
         let value: Value = serde_json::from_str(snippet).map_err(|e| {
             AppError::localized(
@@ -1046,118 +960,6 @@ impl ProviderService {
                 }
             }
         }
-    }
-
-    /// 检测 Gemini 供应商的认证类型
-    ///
-    /// 只区分两种认证方式：OAuth (Google 官方) 和 API Key (所有其他供应商)
-    ///
-    /// # 返回值
-    ///
-    /// - `GeminiAuthType::GoogleOfficial`: Google 官方，使用 OAuth
-    /// - `GeminiAuthType::ApiKey`: 其他所有供应商，使用 API Key
-    fn detect_gemini_auth_type(provider: &Provider) -> GeminiAuthType {
-        // 检查 partner_promotion_key 是否为 google-official
-        if let Some(key) = provider
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.partner_promotion_key.as_deref())
-        {
-            if key.eq_ignore_ascii_case(Self::GOOGLE_OFFICIAL_PARTNER_KEY) {
-                return GeminiAuthType::GoogleOfficial;
-            }
-        }
-
-        // 检查名称是否为 Google
-        let name_lower = provider.name.to_ascii_lowercase();
-        if name_lower == "google" || name_lower.starts_with("google ") {
-            return GeminiAuthType::GoogleOfficial;
-        }
-
-        // 其他所有情况：API Key 认证
-        GeminiAuthType::ApiKey
-    }
-
-    /// 确保 Google 官方 Gemini 供应商的安全标志正确设置（OAuth 模式）
-    ///
-    /// Google 官方 Gemini 使用 OAuth 个人认证，不需要 API Key。
-    ///
-    /// # 写入两处 settings.json 的原因
-    ///
-    /// 1. **`~/.cc-switch/settings.json`** (应用级配置):
-    ///    - CC-Switch 应用的全局设置
-    ///    - 确保应用知道当前使用的认证类型
-    ///    - 用于 UI 显示和其他应用逻辑
-    ///
-    /// 2. **`~/.gemini/settings.json`** (Gemini 客户端配置):
-    ///    - Gemini CLI 客户端读取的配置文件
-    ///    - 直接影响 Gemini 客户端的认证行为
-    ///    - 确保 Gemini 使用正确的认证方式连接 API
-    ///
-    /// # 设置的值
-    ///
-    /// ```json
-    /// {
-    ///   "security": {
-    ///     "auth": {
-    ///       "selectedType": "oauth-personal"
-    ///     }
-    ///   }
-    /// }
-    /// ```
-    ///
-    /// # OAuth 认证流程
-    ///
-    /// 1. 用户切换到 Google 官方供应商
-    /// 2. CC-Switch 设置 `selectedType = "oauth-personal"`
-    /// 3. 用户首次使用 Gemini CLI 时，会自动打开浏览器进行 OAuth 登录
-    /// 4. 登录成功后，凭证保存在 Gemini 的 credential store 中
-    /// 5. 后续请求自动使用保存的凭证
-    pub(crate) fn ensure_google_oauth_security_flag(provider: &Provider) -> Result<(), AppError> {
-        // 检测是否为 Google 官方
-        let auth_type = Self::detect_gemini_auth_type(provider);
-        if auth_type != GeminiAuthType::GoogleOfficial {
-            return Ok(());
-        }
-
-        // 写入应用级别的 settings.json (~/.cc-switch/settings.json)
-        settings::ensure_security_auth_selected_type(Self::GOOGLE_OAUTH_SECURITY_SELECTED_TYPE)?;
-
-        // 写入 Gemini 目录的 settings.json (~/.gemini/settings.json)
-        use crate::gemini_config::write_google_oauth_settings;
-        write_google_oauth_settings()?;
-
-        Ok(())
-    }
-
-    /// 确保 API Key 供应商的安全标志正确设置
-    ///
-    /// 此函数适用于所有使用 API Key 认证的 Gemini 供应商，包括：
-    /// - PackyCode（合作伙伴）
-    /// - 其他第三方 Gemini API 服务
-    ///
-    /// 所有 API Key 供应商使用相同的认证方式和配置逻辑。
-    ///
-    /// # 设置的值
-    ///
-    /// ```json
-    /// {
-    ///   "security": {
-    ///     "auth": {
-    ///       "selectedType": "gemini-api-key"
-    ///     }
-    ///   }
-    /// }
-    /// ```
-    pub(crate) fn ensure_api_key_security_flag(_provider: &Provider) -> Result<(), AppError> {
-        // 写入应用级别的 settings.json (~/.cc-switch/settings.json)
-        settings::ensure_security_auth_selected_type(Self::API_KEY_SECURITY_SELECTED_TYPE)?;
-
-        // 写入 Gemini 目录的 settings.json (~/.gemini/settings.json)
-        use crate::gemini_config::write_generic_settings;
-        write_generic_settings()?;
-
-        Ok(())
     }
 
     /// 归一化 Claude 模型键：读旧键(ANTHROPIC_SMALL_FAST_MODEL)，写新键(DEFAULT_*), 并删除旧键
@@ -1451,54 +1253,7 @@ impl ProviderService {
     }
 
     fn capture_live_snapshot(app_type: &AppType) -> Result<LiveSnapshot, AppError> {
-        match app_type {
-            AppType::Claude => {
-                let path = get_claude_settings_path();
-                let settings = if path.exists() {
-                    Some(read_json_file::<Value>(&path)?)
-                } else {
-                    None
-                };
-                Ok(LiveSnapshot::Claude { settings })
-            }
-            AppType::Codex => {
-                let auth_path = get_codex_auth_path();
-                let config_path = get_codex_config_path();
-                let auth = if auth_path.exists() {
-                    Some(read_json_file::<Value>(&auth_path)?)
-                } else {
-                    None
-                };
-                let config = if config_path.exists() {
-                    Some(
-                        std::fs::read_to_string(&config_path)
-                            .map_err(|e| AppError::io(&config_path, e))?,
-                    )
-                } else {
-                    None
-                };
-                Ok(LiveSnapshot::Codex { auth, config })
-            }
-            AppType::Gemini => {
-                // 新增
-                use crate::gemini_config::{
-                    get_gemini_env_path, get_gemini_settings_path, read_gemini_env,
-                };
-                let path = get_gemini_env_path();
-                let env = if path.exists() {
-                    Some(read_gemini_env()?)
-                } else {
-                    None
-                };
-                let settings_path = get_gemini_settings_path();
-                let config = if settings_path.exists() {
-                    Some(read_json_file(&settings_path)?)
-                } else {
-                    None
-                };
-                Ok(LiveSnapshot::Gemini { env, config })
-            }
-        }
+        live::capture_live_snapshot(app_type)
     }
 
     /// 列出指定应用下的所有供应商
@@ -1826,124 +1581,6 @@ impl ProviderService {
                 }))
             }
         }
-    }
-
-    /// 获取自定义端点列表
-    pub fn get_custom_endpoints(
-        state: &AppState,
-        app_type: AppType,
-        provider_id: &str,
-    ) -> Result<Vec<CustomEndpoint>, AppError> {
-        let cfg = state.config.read().map_err(AppError::from)?;
-        let manager = cfg
-            .get_manager(&app_type)
-            .ok_or_else(|| Self::app_not_found(&app_type))?;
-
-        let Some(provider) = manager.providers.get(provider_id) else {
-            return Ok(vec![]);
-        };
-        let Some(meta) = provider.meta.as_ref() else {
-            return Ok(vec![]);
-        };
-        if meta.custom_endpoints.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let mut result: Vec<_> = meta.custom_endpoints.values().cloned().collect();
-        result.sort_by(|a, b| b.added_at.cmp(&a.added_at));
-        Ok(result)
-    }
-
-    /// 新增自定义端点
-    pub fn add_custom_endpoint(
-        state: &AppState,
-        app_type: AppType,
-        provider_id: &str,
-        url: String,
-    ) -> Result<(), AppError> {
-        let normalized = url.trim().trim_end_matches('/').to_string();
-        if normalized.is_empty() {
-            return Err(AppError::localized(
-                "provider.endpoint.url_required",
-                "URL 不能为空",
-                "URL cannot be empty",
-            ));
-        }
-
-        {
-            let mut cfg = state.config.write().map_err(AppError::from)?;
-            let manager = cfg
-                .get_manager_mut(&app_type)
-                .ok_or_else(|| Self::app_not_found(&app_type))?;
-            let provider = manager.providers.get_mut(provider_id).ok_or_else(|| {
-                AppError::localized(
-                    "provider.not_found",
-                    format!("供应商不存在: {provider_id}"),
-                    format!("Provider not found: {provider_id}"),
-                )
-            })?;
-            let meta = provider.meta.get_or_insert_with(ProviderMeta::default);
-
-            let endpoint = CustomEndpoint {
-                url: normalized.clone(),
-                added_at: Self::now_millis(),
-                last_used: None,
-            };
-            meta.custom_endpoints.insert(normalized, endpoint);
-        }
-
-        state.save()?;
-        Ok(())
-    }
-
-    /// 删除自定义端点
-    pub fn remove_custom_endpoint(
-        state: &AppState,
-        app_type: AppType,
-        provider_id: &str,
-        url: String,
-    ) -> Result<(), AppError> {
-        let normalized = url.trim().trim_end_matches('/').to_string();
-
-        {
-            let mut cfg = state.config.write().map_err(AppError::from)?;
-            if let Some(manager) = cfg.get_manager_mut(&app_type) {
-                if let Some(provider) = manager.providers.get_mut(provider_id) {
-                    if let Some(meta) = provider.meta.as_mut() {
-                        meta.custom_endpoints.remove(&normalized);
-                    }
-                }
-            }
-        }
-
-        state.save()?;
-        Ok(())
-    }
-
-    /// 更新端点最后使用时间
-    pub fn update_endpoint_last_used(
-        state: &AppState,
-        app_type: AppType,
-        provider_id: &str,
-        url: String,
-    ) -> Result<(), AppError> {
-        let normalized = url.trim().trim_end_matches('/').to_string();
-
-        {
-            let mut cfg = state.config.write().map_err(AppError::from)?;
-            if let Some(manager) = cfg.get_manager_mut(&app_type) {
-                if let Some(provider) = manager.providers.get_mut(provider_id) {
-                    if let Some(meta) = provider.meta.as_mut() {
-                        if let Some(endpoint) = meta.custom_endpoints.get_mut(&normalized) {
-                            endpoint.last_used = Some(Self::now_millis());
-                        }
-                    }
-                }
-            }
-        }
-
-        state.save()?;
-        Ok(())
     }
 
     /// 更新供应商排序
@@ -2683,13 +2320,6 @@ impl ProviderService {
             format!("应用类型不存在: {app_type:?}"),
             format!("App type not found: {app_type:?}"),
         )
-    }
-
-    fn now_millis() -> i64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64
     }
 
     pub fn delete(state: &AppState, app_type: AppType, provider_id: &str) -> Result<(), AppError> {
