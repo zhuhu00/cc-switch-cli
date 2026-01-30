@@ -10,6 +10,16 @@
 
 ---
 
+## Progress（截至 2026-01-30）
+
+- [x] Task 1：Gemini MCP 导入失败用例（反向转换）— `df101b0`
+- [x] Task 2：实现 Gemini MCP 反向格式转换 + timeout 兼容 — `df101b0`
+- [x] Task 3：MCP upsert 取消勾选清理 live 的失败用例 — `df101b0`
+- [x] Task 4：实现 upsert 的 “disable app => remove from live” 语义 — `df101b0`
+- [x] Task 5：Gemini provider 切换保留 `mcpServers` 的失败用例 — `df101b0`
+- [x] Task 6：Gemini provider 写入策略改为 merge（保留现有 `settings.json` 其他字段）— `df101b0`
+- [x] Task 7：Phase 1 全量回归（`cd src-tauri && cargo test`）— 已多次验证通过（最近一次：2026-01-30）
+
 ## Task 1: 为 Gemini MCP 导入添加失败用例（httpUrl/url/type 反向转换）
 
 **Files:**

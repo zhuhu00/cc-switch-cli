@@ -9,6 +9,17 @@
 
 ---
 
+## 0. 当前进度（截至 2026-01-30）
+
+- ✅ 已完成：Phase 1（正确性对齐）— `df101b0`
+- ✅ 已完成：Phase 2（数据结构/核心语义对齐）— `ae8e93f`、`6a7e15d`、`ba36f2a`、`07167e7`
+- ✅ 额外对齐：deeplink provider 导入能力（与 upstream 协议兼容的解析 + 导入）— `df101b0`、`dd39ca7`
+- ✅ 已落实：移除 OpenCode 范围（计划层面）— `53aca67`
+- ⏳ 未开始：Phase 3（Skills 系统重做）
+- ⏳ 未开始：Phase 4（Proxy/Failover/Stream Check/Usage）
+
+> 注：上述 commit 为本仓库 `cc-switch-cli` 的提交号，用于追溯实现与回归依据。
+
 ## 1. 背景与约束
 
 ### 1.1 背景
@@ -85,10 +96,10 @@ CLI 特有：`interactive(TUI)`、`completions`。
 - 修复会导致“导入为 0 / 覆盖用户配置 / 残留配置”的不一致行为，使其与 upstream 语义对齐或提供兼容开关。
 
 **建议任务**
-1) Gemini MCP 读写双向转换对齐：读取时补齐 `type`、反向映射 `httpUrl -> url`，并处理 `timeout` 兼容。
-2) `McpService::upsert_server` 对齐语义：当 apps 从 true→false 时，执行 `remove_server_from_*` 清理对应 live。
-3) Gemini provider live 写入改为 merge（保留现有 `settings.json` 的非 provider 字段，例如 `mcpServers`）。
-4) 引入 “should_sync” 行为开关（或默认策略）：当目标 app 未初始化（目录/文件不存在）时是否跳过写入/删除（upstream 更保守，CLI 当前更主动）。
+- [x] Gemini MCP 读写双向转换对齐：读取时补齐 `type`、反向映射 `httpUrl -> url`，并处理 `timeout` 兼容。（`df101b0`）
+- [x] `McpService::upsert_server` 对齐语义：当 apps 从 true→false 时，执行 `remove_server_from_*` 清理对应 live。（`df101b0`）
+- [x] Gemini provider live 写入改为 merge（保留现有 `settings.json` 的非 provider 字段，例如 `mcpServers`）。（`df101b0`）
+- [ ] 引入 “should_sync” 行为开关（或默认策略）：当目标 app 未初始化（目录/文件不存在）时是否跳过写入/删除（upstream 更保守，CLI 当前更主动）。
 
 **验收标准**
 - 从 Gemini 导入远端 MCP：不再因 `type/httpUrl` 差异导入为 0。
@@ -101,12 +112,12 @@ CLI 特有：`interactive(TUI)`、`completions`。
 - 对齐 upstream 的数据模型与关键“业务 API”语义，使后续移植 upstream 的高级能力成本更低。
 
 **建议任务**
-1) `src-tauri/src/provider.rs` 补齐 upstream 字段（至少：`inFailoverQueue`、`UsageScript.templateType`、`ProviderMeta.endpointAutoSelect/testConfig/proxyConfig/limit*` 等），保持 serde 向后兼容（新增字段 `#[serde(default)]`）。
-2) provider 列表顺序策略对齐：评估从 `HashMap` → `IndexMap`，或明确 `sort_index` 并在展示/导出时稳定排序。
-3) `ProviderService::current()` 对齐“有效 current”：当 current 指向不存在的 provider 时，提供自愈（fallback）或清晰错误。
-4) usage script 对齐：当 `usage_script` 未填写 key/base_url 时，回退从 provider settings 提取。
-5) Codex common config snippet 对齐：补齐 `extract_codex_common_config()` 风格的抽取与写回策略（避免污染 mcp_servers base_url 等）。
-6) `services/provider` 结构收敛：把 `services/provider.rs` 拆分成 `services/provider/{mod,live,endpoints,usage,gemini_auth}.rs`（与 upstream 同构）以降低后续同步成本。
+- [x] `src-tauri/src/provider.rs` 补齐 upstream 字段（`inFailoverQueue`、`UsageScript.templateType`、`ProviderMeta.*` 等）并保持 serde 向后兼容。（`ae8e93f`）
+- [x] provider 列表顺序策略对齐：`ProviderManager.providers` 使用 `IndexMap`，并以 `sort_index -> created_at` 稳定排序。（`ae8e93f`）
+- [x] `ProviderService::current()` 自愈：current 指向不存在时自动 fallback 到首个 provider。（`ae8e93f`）
+- [x] usage script 对齐：当 `usage_script` 缺省 key/base_url 时回退从 provider settings 提取。（`ae8e93f`、`6a7e15d`）
+- [x] Codex common config snippet：抽取/写回并在写入时 merge，避免污染 `mcp_servers.*`。（`ba36f2a`）
+- [x] `services/provider` 结构收敛：拆分为 `provider/{mod,live,endpoints,usage,gemini_auth}.rs`。（`6a7e15d`、`07167e7`）
 
 **验收标准**
 - 既有配置文件可无痛加载（旧字段不丢，新字段默认值合理）。
