@@ -419,7 +419,15 @@ fn handle_action(
         Action::ProviderSwitch { id } => {
             let state = load_state()?;
             ProviderService::switch(&state, app.app_type.clone(), &id)?;
-            app.push_toast(texts::restart_note(), ToastKind::Success);
+            if !crate::sync_policy::should_sync_live(&app.app_type) {
+                let mut message =
+                    texts::tui_toast_live_sync_skipped_uninitialized(app.app_type.as_str());
+                message.push(' ');
+                message.push_str(texts::restart_note());
+                app.push_toast(message, ToastKind::Warning);
+            } else {
+                app.push_toast(texts::restart_note(), ToastKind::Success);
+            }
             *data = UiData::load(&app.app_type)?;
             Ok(())
         }
@@ -457,7 +465,60 @@ fn handle_action(
         Action::McpToggle { id, enabled } => {
             let state = load_state()?;
             McpService::toggle_app(&state, &id, app.app_type.clone(), enabled)?;
-            app.push_toast(texts::tui_toast_mcp_updated(), ToastKind::Success);
+            if !crate::sync_policy::should_sync_live(&app.app_type) {
+                let mut message = texts::tui_toast_mcp_updated().to_string();
+                message.push(' ');
+                message.push_str(&texts::tui_toast_live_sync_skipped_uninitialized(
+                    app.app_type.as_str(),
+                ));
+                app.push_toast(message, ToastKind::Warning);
+            } else {
+                app.push_toast(texts::tui_toast_mcp_updated(), ToastKind::Success);
+            }
+            *data = UiData::load(&app.app_type)?;
+            Ok(())
+        }
+        Action::McpSetApps { id, apps } => {
+            let Some(before) = data
+                .mcp
+                .rows
+                .iter()
+                .find(|row| row.id == id)
+                .map(|row| row.server.apps.clone())
+            else {
+                app.push_toast(texts::tui_toast_mcp_server_not_found(), ToastKind::Warning);
+                return Ok(());
+            };
+
+            let state = load_state()?;
+            let mut skipped: Vec<&str> = Vec::new();
+            let mut changed = false;
+
+            for app_type in [AppType::Claude, AppType::Codex, AppType::Gemini] {
+                let next_enabled = apps.is_enabled_for(&app_type);
+                if before.is_enabled_for(&app_type) == next_enabled {
+                    continue;
+                }
+
+                changed = true;
+                McpService::toggle_app(&state, &id, app_type.clone(), next_enabled)?;
+                if !crate::sync_policy::should_sync_live(&app_type) {
+                    skipped.push(app_type.as_str());
+                }
+            }
+
+            if !changed {
+                // Shouldn't happen because the picker avoids emitting an action when unchanged.
+                app.push_toast(texts::tui_toast_mcp_updated(), ToastKind::Success);
+            } else if skipped.is_empty() {
+                app.push_toast(texts::tui_toast_mcp_updated(), ToastKind::Success);
+            } else {
+                app.push_toast(
+                    texts::tui_toast_mcp_updated_live_sync_skipped(&skipped),
+                    ToastKind::Warning,
+                );
+            }
+
             *data = UiData::load(&app.app_type)?;
             Ok(())
         }

@@ -116,6 +116,12 @@ pub enum Overlay {
     },
     TextView(TextViewState),
     CommonSnippetView(TextViewState),
+    McpAppsPicker {
+        id: String,
+        name: String,
+        selected: usize,
+        apps: crate::app_config::McpApps,
+    },
     SpeedtestRunning {
         url: String,
     },
@@ -343,6 +349,10 @@ pub enum Action {
     McpToggle {
         id: String,
         enabled: bool,
+    },
+    McpSetApps {
+        id: String,
+        apps: crate::app_config::McpApps,
     },
     McpDelete {
         id: String,
@@ -868,6 +878,18 @@ impl App {
                     enabled: !enabled,
                 }
             }
+            KeyCode::Char('m') => {
+                let Some(row) = visible.get(self.mcp_idx) else {
+                    return Action::None;
+                };
+                self.overlay = Overlay::McpAppsPicker {
+                    id: row.id.clone(),
+                    name: row.server.name.clone(),
+                    selected: app_type_picker_index(&self.app_type),
+                    apps: row.server.apps.clone(),
+                };
+                Action::None
+            }
             KeyCode::Char('i') => Action::McpImport,
             KeyCode::Char('v') => {
                 self.overlay = Overlay::TextInput(TextInputState {
@@ -1287,6 +1309,47 @@ impl App {
                 }
                 _ => Action::None,
             },
+            Overlay::McpAppsPicker {
+                id, selected, apps, ..
+            } => match key.code {
+                KeyCode::Esc => {
+                    self.overlay = Overlay::None;
+                    Action::None
+                }
+                KeyCode::Up => {
+                    *selected = selected.saturating_sub(1);
+                    Action::None
+                }
+                KeyCode::Down => {
+                    *selected = (*selected + 1).min(2);
+                    Action::None
+                }
+                KeyCode::Char('x') | KeyCode::Char(' ') => {
+                    let app_type = app_type_for_picker_index(*selected);
+                    let enabled = apps.is_enabled_for(&app_type);
+                    apps.set_enabled_for(&app_type, !enabled);
+                    Action::None
+                }
+                KeyCode::Enter => {
+                    let id = id.clone();
+                    let next = apps.clone();
+                    let unchanged = data
+                        .mcp
+                        .rows
+                        .iter()
+                        .find(|row| row.id == id)
+                        .map(|row| row.server.apps == next)
+                        .unwrap_or(false);
+
+                    self.overlay = Overlay::None;
+                    if unchanged {
+                        Action::None
+                    } else {
+                        Action::McpSetApps { id, apps: next }
+                    }
+                }
+                _ => Action::None,
+            },
             Overlay::SpeedtestRunning { .. } => match key.code {
                 KeyCode::Esc => {
                     self.overlay = Overlay::None;
@@ -1629,6 +1692,22 @@ fn cycle_app_type(current: &AppType, dir: i8) -> AppType {
     }
 }
 
+fn app_type_picker_index(app_type: &AppType) -> usize {
+    match app_type {
+        AppType::Claude => 0,
+        AppType::Codex => 1,
+        AppType::Gemini => 2,
+    }
+}
+
+fn app_type_for_picker_index(index: usize) -> AppType {
+    match index {
+        1 => AppType::Codex,
+        2 => AppType::Gemini,
+        _ => AppType::Claude,
+    }
+}
+
 fn should_hide_provider_field(key: &str) -> bool {
     matches!(key, "createdAt" | "updatedAt" | "inFailoverQueue")
 }
@@ -1875,6 +1954,77 @@ mod tests {
         assert!(matches!(
             app.editor.as_ref().map(|e| &e.submit),
             Some(EditorSubmit::McpAdd)
+        ));
+    }
+
+    #[test]
+    fn mcp_m_opens_apps_picker_overlay() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.mcp.rows.push(super::super::data::McpRow {
+            id: "m1".to_string(),
+            server: crate::app_config::McpServer {
+                id: "m1".to_string(),
+                name: "Server".to_string(),
+                server: json!({}),
+                apps: crate::app_config::McpApps::default(),
+                description: None,
+                homepage: None,
+                docs: None,
+                tags: vec![],
+            },
+        });
+
+        let action = app.on_key(key(KeyCode::Char('m')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::McpAppsPicker {
+                id,
+                name,
+                selected: 1,
+                ..
+            } if id == "m1" && name == "Server"
+        ));
+    }
+
+    #[test]
+    fn mcp_apps_picker_x_toggles_selected_app_and_enter_emits_action() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.mcp.rows.push(super::super::data::McpRow {
+            id: "m1".to_string(),
+            server: crate::app_config::McpServer {
+                id: "m1".to_string(),
+                name: "Server".to_string(),
+                server: json!({}),
+                apps: crate::app_config::McpApps::default(),
+                description: None,
+                homepage: None,
+                docs: None,
+                tags: vec![],
+            },
+        });
+
+        app.on_key(key(KeyCode::Char('m')), &data);
+
+        let action = app.on_key(key(KeyCode::Char('x')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::McpAppsPicker { apps, .. } if apps.codex
+        ));
+
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            action,
+            Action::McpSetApps { id, apps } if id == "m1" && apps.codex && !apps.claude && !apps.gemini
         ));
     }
 

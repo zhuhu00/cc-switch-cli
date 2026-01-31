@@ -1060,6 +1060,7 @@ fn render_mcp(
             theme,
             &[
                 ("x", texts::tui_key_toggle()),
+                ("m", texts::tui_key_apps()),
                 ("a", texts::tui_key_add()),
                 ("e", texts::tui_key_edit()),
                 ("i", texts::tui_key_import()),
@@ -1597,6 +1598,67 @@ fn render_overlay(frame: &mut Frame<'_>, app: &App, data: &UiData, theme: &super
                 .collect::<Vec<_>>();
 
             frame.render_widget(Paragraph::new(shown).wrap(Wrap { trim: false }), chunks[1]);
+        }
+        Overlay::McpAppsPicker {
+            name,
+            selected,
+            apps,
+            ..
+        } => {
+            let area = centered_rect(60, 45, frame.area());
+            frame.render_widget(Clear, area);
+
+            let outer = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Plain)
+                .border_style(Style::default().fg(theme.dim))
+                .title(texts::tui_mcp_apps_title(name));
+            frame.render_widget(outer.clone(), area);
+            let inner = outer.inner(area);
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(inner);
+
+            render_key_bar(
+                frame,
+                chunks[0],
+                theme,
+                &[
+                    ("x", texts::tui_key_toggle()),
+                    ("Enter", texts::tui_key_apply()),
+                    ("Esc", texts::tui_key_cancel()),
+                ],
+            );
+
+            let items = [
+                crate::app_config::AppType::Claude,
+                crate::app_config::AppType::Codex,
+                crate::app_config::AppType::Gemini,
+            ]
+            .into_iter()
+            .map(|app_type| {
+                let enabled = apps.is_enabled_for(&app_type);
+                let marker = if enabled {
+                    texts::tui_marker_active()
+                } else {
+                    texts::tui_marker_inactive()
+                };
+
+                ListItem::new(Line::from(Span::raw(format!(
+                    "{marker}  {}",
+                    app_type.as_str()
+                ))))
+            });
+
+            let list = List::new(items)
+                .highlight_style(selection_style(theme))
+                .highlight_symbol(highlight_symbol(theme));
+
+            let mut state = ListState::default();
+            state.select(Some(*selected));
+            frame.render_stateful_widget(list, chunks[1], &mut state);
         }
         Overlay::SpeedtestRunning { url } => {
             let area = centered_rect(70, 30, frame.area());

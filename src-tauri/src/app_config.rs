@@ -149,7 +149,7 @@ pub enum AppType {
 }
 
 impl AppType {
-    pub fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             AppType::Claude => "claude",
             AppType::Codex => "codex",

@@ -474,9 +474,9 @@ pub mod texts {
 
     pub fn tui_footer_action_keys_mcp() -> &'static str {
         if is_chinese() {
-            "[ ] 切换应用  x 启用/禁用  a 添加  e 编辑  i 导入  v 校验命令  d 删除  / 过滤  Esc 返回  ? 帮助"
+            "[ ] 切换应用  x 启用/禁用  m 应用  a 添加  e 编辑  i 导入  v 校验命令  d 删除  / 过滤  Esc 返回  ? 帮助"
         } else {
-            "[ ] switch app  x toggle  a add  e edit  i import  v validate  d delete  / filter  Esc back  ? help"
+            "[ ] switch app  x toggle  m apps  a add  e edit  i import  v validate  d delete  / filter  Esc back  ? help"
         }
     }
 
@@ -538,9 +538,9 @@ pub mod texts {
 
     pub fn tui_help_text() -> &'static str {
         if is_chinese() {
-            "[ ]  切换应用\n←→  切换菜单/内容焦点\n↑↓  移动\n/   过滤\nEsc  返回\n?   显示/关闭帮助\n\n页面快捷键（在页面内容区顶部显示）：\n- Providers: Enter 详情，s 切换，a 添加，e 编辑，d 删除，t 测速\n- Provider Detail: s 切换，e 编辑，t 测速\n- MCP: x 启用/禁用，a 添加，e 编辑，i 导入，v 校验命令，d 删除\n- Prompts: Enter 查看，a 激活，x 取消激活(当前)，e 编辑，d 删除\n- Config: Enter 打开/执行，e 编辑片段\n- Settings: Enter 应用"
+            "[ ]  切换应用\n←→  切换菜单/内容焦点\n↑↓  移动\n/   过滤\nEsc  返回\n?   显示/关闭帮助\n\n页面快捷键（在页面内容区顶部显示）：\n- Providers: Enter 详情，s 切换，a 添加，e 编辑，d 删除，t 测速\n- Provider Detail: s 切换，e 编辑，t 测速\n- MCP: x 启用/禁用(当前应用)，m 选择应用，a 添加，e 编辑，i 导入，v 校验命令，d 删除\n- Prompts: Enter 查看，a 激活，x 取消激活(当前)，e 编辑，d 删除\n- Config: Enter 打开/执行，e 编辑片段\n- Settings: Enter 应用"
         } else {
-            "[ ]  switch app\n←→  focus menu/content\n↑↓  move\n/   filter\nEsc  back\n?   toggle help\n\nPage keys (shown at the top of each page):\n- Providers: Enter details, s switch, a add, e edit, d delete, t speedtest\n- Provider Detail: s switch, e edit, t speedtest\n- MCP: x toggle, a add, e edit, i import, v validate, d delete\n- Prompts: Enter view, a activate, x deactivate active, e edit, d delete\n- Config: Enter open/run, e edit snippet\n- Settings: Enter apply"
+            "[ ]  switch app\n←→  focus menu/content\n↑↓  move\n/   filter\nEsc  back\n?   toggle help\n\nPage keys (shown at the top of each page):\n- Providers: Enter details, s switch, a add, e edit, d delete, t speedtest\n- Provider Detail: s switch, e edit, t speedtest\n- MCP: x toggle current, m select apps, a add, e edit, i import, v validate, d delete\n- Prompts: Enter view, a activate, x deactivate active, e edit, d delete\n- Config: Enter open/run, e edit snippet\n- Settings: Enter apply"
         }
     }
 
@@ -837,6 +837,14 @@ pub mod texts {
             "启用/禁用"
         } else {
             "toggle"
+        }
+    }
+
+    pub fn tui_key_apps() -> &'static str {
+        if is_chinese() {
+            "应用"
+        } else {
+            "apps"
         }
     }
 
@@ -1263,6 +1271,14 @@ pub mod texts {
             format!("编辑 MCP 服务器: {}", name)
         } else {
             format!("Edit MCP Server: {}", name)
+        }
+    }
+
+    pub fn tui_mcp_apps_title(name: &str) -> String {
+        if is_chinese() {
+            format!("选择 MCP 应用: {}", name)
+        } else {
+            format!("Select MCP Apps: {}", name)
         }
     }
 
@@ -1699,6 +1715,34 @@ pub mod texts {
             format!("已导入 {count} 个 MCP 服务器。")
         } else {
             format!("Imported {count} MCP server(s).")
+        }
+    }
+
+    pub fn tui_toast_live_sync_skipped_uninitialized(app: &str) -> String {
+        if is_chinese() {
+            format!(
+                "未检测到 {app} 客户端本地配置，已跳过写入 live 文件；先运行一次 {app} 初始化后再试。"
+            )
+        } else {
+            format!("Live sync skipped: {app} client not initialized; run it once to initialize, then retry.")
+        }
+    }
+
+    pub fn tui_toast_mcp_updated_live_sync_skipped(apps: &[&str]) -> String {
+        let list = if is_chinese() {
+            apps.join("、")
+        } else {
+            apps.join(", ")
+        };
+
+        if is_chinese() {
+            format!(
+                "MCP 已更新，但以下客户端未初始化，已跳过写入 live 文件：{list}；先运行一次对应客户端初始化后再试。"
+            )
+        } else {
+            format!(
+                "MCP updated, but live sync skipped for uninitialized client(s): {list}; run them once to initialize, then retry."
+            )
         }
     }
 
