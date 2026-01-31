@@ -19,3 +19,4 @@ vitest-report.json
 /blog
 *.bak
 skill.md
+scripts/
