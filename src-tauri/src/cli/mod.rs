@@ -60,6 +60,10 @@ pub enum Commands {
     #[command(subcommand)]
     Env(commands::env::EnvCommand),
 
+    /// Check for CLI tool updates (Claude Code, Codex, Gemini)
+    #[command(subcommand)]
+    Check(commands::check::CheckCommand),
+
     /// Enter interactive mode
     #[command(alias = "ui")]
     Interactive,
