@@ -2,8 +2,8 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-4.5.0-blue.svg)](https://github.com/saladday/cc-switch-cli/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/saladday/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-4.5.0-blue.svg)](https://github.com/zhuhu00/cc-switch-cli/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/zhuhu00/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -160,6 +160,8 @@ cc-switch skills install <name>      # 安装技能
 cc-switch skills uninstall <name>    # 卸载技能
 cc-switch skills enable <name>       # 为当前应用启用（配合 --app）
 cc-switch skills disable <name>      # 为当前应用禁用（配合 --app）
+cc-switch skills enable-all          # 为当前应用启用所有技能
+cc-switch skills disable-all         # 为当前应用禁用所有技能
 cc-switch skills info <name>         # 显示技能信息
 cc-switch skills sync                # 同步已启用技能到应用目录
 cc-switch skills sync-method [m]     # 查看/设置同步方式（auto|symlink|copy）
@@ -211,9 +213,17 @@ cc-switch config reset               # 重置为默认配置
 
 ### 🔧 实用工具
 
-Shell 补全、环境管理等实用功能。
+Shell 补全、环境管理、CLI 版本检查等实用功能。
 
 ```bash
+# CLI 版本检查
+cc-switch check updates              # 检查 CLI 工具更新（Claude Code、Codex、Gemini 等）
+cc-switch check updates --offline    # 离线模式（仅显示已安装版本）
+cc-switch check updates --json       # JSON 格式输出
+cc-switch check upgrade              # 显示可升级工具（预览）
+cc-switch check upgrade --yes        # 实际执行升级
+cc-switch check upgrade claude --yes # 升级指定工具
+
 # Shell 补全
 cc-switch completions <shell>        # 生成 shell 补全（bash/zsh/fish/powershell）
 
@@ -228,13 +238,13 @@ cc-switch env list                   # 列出环境变量
 
 ### 方法 1：下载预编译二进制（推荐）
 
-从 [GitHub Releases](https://github.com/saladday/cc-switch-cli/releases) 下载最新版本。
+从 [GitHub Releases](https://github.com/zhuhu00/cc-switch-cli/releases) 下载最新版本。
 
 #### macOS
 
 ```bash
 # 下载 Universal Binary（推荐，支持 Apple Silicon + Intel）
-curl -LO https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-darwin-universal.tar.gz
+curl -LO https://github.com/zhuhu00/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-darwin-universal.tar.gz
 
 # 解压
 tar -xzf cc-switch-cli-v4.4.0-darwin-universal.tar.gz
@@ -253,7 +263,7 @@ xattr -cr /usr/local/bin/cc-switch
 
 ```bash
 # 下载
-curl -LO https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-linux-x64-musl.tar.gz
+curl -LO https://github.com/zhuhu00/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-linux-x64-musl.tar.gz
 
 # 解压
 tar -xzf cc-switch-cli-v4.4.0-linux-x64-musl.tar.gz
@@ -269,7 +279,7 @@ sudo mv cc-switch /usr/local/bin/
 
 ```bash
 # 适用于树莓派或 ARM 服务器
-curl -LO https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-linux-arm64-musl.tar.gz
+curl -LO https://github.com/zhuhu00/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-linux-arm64-musl.tar.gz
 tar -xzf cc-switch-cli-v4.4.0-linux-arm64-musl.tar.gz
 chmod +x cc-switch
 sudo mv cc-switch /usr/local/bin/
@@ -279,7 +289,7 @@ sudo mv cc-switch /usr/local/bin/
 
 ```powershell
 # 下载 zip 文件
-# https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-windows-x64.zip
+# https://github.com/zhuhu00/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-windows-x64.zip
 
 # 解压后将 cc-switch.exe 移动到 PATH 目录，例如：
 move cc-switch.exe C:\Windows\System32\
@@ -295,7 +305,7 @@ move cc-switch.exe C:\Windows\System32\
 
 **构建：**
 ```bash
-git clone https://github.com/saladday/cc-switch-cli.git
+git clone https://github.com/zhuhu00/cc-switch-cli.git
 cd cc-switch-cli/src-tauri
 cargo build --release
 
@@ -395,7 +405,7 @@ cc-switch --app codex provider list
 
 <br>
 
-请在我们的 [GitHub Issues](https://github.com/saladday/cc-switch-cli/issues) 页面提交问题，并包含：
+请在我们的 [GitHub Issues](https://github.com/zhuhu00/cc-switch-cli/issues) 页面提交问题，并包含：
 - 问题或功能请求的详细描述
 - 复现步骤（针对 bug）
 - 你的系统信息（操作系统、版本）
@@ -455,4 +465,4 @@ src-tauri/src/
 ## 📜 许可证
 
 - MIT © 原作者：Jason Young
-- CLI 分支维护者：saladday
+- CLI 分支维护者：zhuhu00
