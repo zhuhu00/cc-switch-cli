@@ -2,8 +2,8 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-4.5.0-blue.svg)](https://github.com/saladday/cc-switch-cli/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/saladday/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-4.5.0-blue.svg)](https://github.com/zhuhu00/cc-switch-cli/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/zhuhu00/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -160,6 +160,8 @@ cc-switch skills install <name>      # Install a skill
 cc-switch skills uninstall <name>    # Uninstall a skill
 cc-switch skills enable <name>       # Enable for current app (--app)
 cc-switch skills disable <name>      # Disable for current app (--app)
+cc-switch skills enable-all          # Enable all skills for current app
+cc-switch skills disable-all         # Disable all skills for current app
 cc-switch skills info <name>         # Show skill information
 cc-switch skills sync                # Sync enabled skills to app dirs
 cc-switch skills sync-method [m]     # Show/set sync method (auto|symlink|copy)
@@ -211,9 +213,17 @@ Interactive mode supports English and Chinese, language settings are automatical
 
 ### 🔧 Utilities
 
-Shell completions, environment management, and other utilities.
+Shell completions, environment management, CLI version checking, and other utilities.
 
 ```bash
+# CLI Version Check
+cc-switch check updates              # Check for CLI tool updates (Claude Code, Codex, Gemini, etc.)
+cc-switch check updates --offline    # Offline mode (only show installed versions)
+cc-switch check updates --json       # Output in JSON format
+cc-switch check upgrade              # Show upgradable tools (dry-run)
+cc-switch check upgrade --yes        # Actually upgrade all tools
+cc-switch check upgrade claude --yes # Upgrade specific tool
+
 # Shell completions
 cc-switch completions <shell>        # Generate shell completions (bash/zsh/fish/powershell)
 
@@ -228,13 +238,13 @@ cc-switch env list                   # List environment variables
 
 ### Method 1: Download Pre-built Binaries (Recommended)
 
-Download the latest release from [GitHub Releases](https://github.com/saladday/cc-switch-cli/releases).
+Download the latest release from [GitHub Releases](https://github.com/zhuhu00/cc-switch-cli/releases).
 
 #### macOS
 
 ```bash
 # Download Universal Binary (recommended, supports Apple Silicon + Intel)
-curl -LO https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-darwin-universal.tar.gz
+curl -LO https://github.com/zhuhu00/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-darwin-universal.tar.gz
 
 # Extract
 tar -xzf cc-switch-cli-v4.4.0-darwin-universal.tar.gz
@@ -253,7 +263,7 @@ xattr -cr /usr/local/bin/cc-switch
 
 ```bash
 # Download
-curl -LO https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-linux-x64-musl.tar.gz
+curl -LO https://github.com/zhuhu00/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-linux-x64-musl.tar.gz
 
 # Extract
 tar -xzf cc-switch-cli-v4.4.0-linux-x64-musl.tar.gz
@@ -269,7 +279,7 @@ sudo mv cc-switch /usr/local/bin/
 
 ```bash
 # For Raspberry Pi or ARM servers
-curl -LO https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-linux-arm64-musl.tar.gz
+curl -LO https://github.com/zhuhu00/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-linux-arm64-musl.tar.gz
 tar -xzf cc-switch-cli-v4.4.0-linux-arm64-musl.tar.gz
 chmod +x cc-switch
 sudo mv cc-switch /usr/local/bin/
@@ -279,7 +289,7 @@ sudo mv cc-switch /usr/local/bin/
 
 ```powershell
 # Download the zip file
-# https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-windows-x64.zip
+# https://github.com/zhuhu00/cc-switch-cli/releases/latest/download/cc-switch-cli-v4.4.0-windows-x64.zip
 
 # After extracting, move cc-switch.exe to a PATH directory, e.g.:
 move cc-switch.exe C:\Windows\System32\
@@ -295,7 +305,7 @@ move cc-switch.exe C:\Windows\System32\
 
 **Build:**
 ```bash
-git clone https://github.com/saladday/cc-switch-cli.git
+git clone https://github.com/zhuhu00/cc-switch-cli.git
 cd cc-switch-cli/src-tauri
 cargo build --release
 
@@ -395,7 +405,7 @@ cc-switch --app codex provider list
 
 <br>
 
-Please open an issue on our [GitHub Issues](https://github.com/saladday/cc-switch-cli/issues) page with:
+Please open an issue on our [GitHub Issues](https://github.com/zhuhu00/cc-switch-cli/issues) page with:
 - Detailed description of the problem or feature request
 - Steps to reproduce (for bugs)
 - Your system information (OS, version)
@@ -455,4 +465,4 @@ Contributions welcome! This fork focuses on CLI functionality.
 ## 📜 License
 
 - MIT © Original Author: Jason Young
-- CLI Fork Maintainer: saladday
+- CLI Fork Maintainer: zhuhu00
