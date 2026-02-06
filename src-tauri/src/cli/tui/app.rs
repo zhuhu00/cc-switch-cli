@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::Size;
 use std::collections::HashSet;
+use unicode_width::UnicodeWidthChar;
 
 use crate::app_config::AppType;
 use crate::cli::i18n::texts;
@@ -238,25 +239,121 @@ impl EditorState {
         self.lines.get(row).map(|s| s.chars().count()).unwrap_or(0)
     }
 
-    fn ensure_cursor_visible(&mut self, viewport_rows: usize) {
+    pub(super) fn wrap_line_segments(line: &str, width: u16) -> Vec<String> {
+        let width = width as usize;
+        if width == 0 {
+            return vec![String::new()];
+        }
+
+        let mut segments = Vec::new();
+        let mut current = String::new();
+        let mut current_width = 0usize;
+
+        for ch in line.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
+            if current_width.saturating_add(ch_width) > width && !current.is_empty() {
+                segments.push(current);
+                current = String::new();
+                current_width = 0;
+            }
+
+            current.push(ch);
+            current_width = current_width.saturating_add(ch_width);
+        }
+
+        if segments.is_empty() {
+            segments.push(current);
+        } else {
+            segments.push(current);
+        }
+
+        segments
+    }
+
+    fn wrapped_line_height(line: &str, width: u16) -> usize {
+        Self::wrap_line_segments(line, width).len().max(1)
+    }
+
+    fn wrapped_cursor_subline_and_x(line: &str, width: u16, cursor_col: usize) -> (usize, u16) {
+        let width = width as usize;
+        if width == 0 {
+            return (0, 0);
+        }
+
+        let mut subline = 0usize;
+        let mut current_width = 0usize;
+        let mut col = 0usize;
+
+        for ch in line.chars() {
+            if col >= cursor_col {
+                break;
+            }
+
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
+            if current_width.saturating_add(ch_width) > width && current_width > 0 {
+                subline = subline.saturating_add(1);
+                current_width = 0;
+            }
+
+            current_width = current_width.saturating_add(ch_width);
+            col = col.saturating_add(1);
+        }
+
+        let x = current_width.min(width.saturating_sub(1)) as u16;
+        (subline, x)
+    }
+
+    pub(super) fn cursor_visual_offset_from_scroll(&self, width: u16) -> (usize, u16) {
+        if self.lines.is_empty() {
+            return (0, 0);
+        }
+
+        let cursor_row = self.cursor_row.min(self.lines.len().saturating_sub(1));
+        let scroll = self
+            .scroll
+            .min(self.lines.len().saturating_sub(1))
+            .min(cursor_row);
+
+        let mut y = 0usize;
+        for row in scroll..cursor_row {
+            y = y.saturating_add(Self::wrapped_line_height(&self.lines[row], width));
+        }
+
+        let cursor_col = self.cursor_col.min(self.line_len_chars(cursor_row));
+        let (subline, x) =
+            Self::wrapped_cursor_subline_and_x(&self.lines[cursor_row], width, cursor_col);
+        (y.saturating_add(subline), x)
+    }
+
+    fn ensure_cursor_visible(&mut self, viewport: Size) {
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
         self.cursor_row = self.cursor_row.min(self.lines.len() - 1);
         self.cursor_col = self.cursor_col.min(self.line_len_chars(self.cursor_row));
 
-        if self.cursor_row < self.scroll {
-            self.scroll = self.cursor_row;
-        } else if viewport_rows > 0 && self.cursor_row >= self.scroll + viewport_rows {
-            self.scroll = self
-                .cursor_row
-                .saturating_sub(viewport_rows.saturating_sub(1));
-        }
-
         if !self.lines.is_empty() {
             self.scroll = self.scroll.min(self.lines.len() - 1);
         } else {
             self.scroll = 0;
+        }
+
+        if self.cursor_row < self.scroll {
+            self.scroll = self.cursor_row;
+        }
+
+        let height = viewport.height as usize;
+        if height == 0 {
+            return;
+        }
+
+        let width = viewport.width.max(1);
+
+        let (mut cursor_y, _) = self.cursor_visual_offset_from_scroll(width);
+        while cursor_y >= height && self.scroll < self.cursor_row {
+            let removed = Self::wrapped_line_height(&self.lines[self.scroll], width);
+            cursor_y = cursor_y.saturating_sub(removed);
+            self.scroll = self.scroll.saturating_add(1);
         }
     }
 
@@ -2397,7 +2494,8 @@ impl App {
     }
 
     fn on_editor_key(&mut self, key: KeyEvent) -> Action {
-        let viewport = self.editor_viewport_rows();
+        let viewport = self.editor_viewport_size();
+        let jump_rows = viewport.height as usize;
 
         let Some(editor) = &mut self.editor else {
             return Action::None;
@@ -2474,8 +2572,8 @@ impl App {
                 Action::None
             }
             KeyCode::PageUp => {
-                editor.scroll = editor.scroll.saturating_sub(viewport);
-                editor.cursor_row = editor.cursor_row.saturating_sub(viewport);
+                editor.scroll = editor.scroll.saturating_sub(jump_rows);
+                editor.cursor_row = editor.cursor_row.saturating_sub(jump_rows);
                 editor.cursor_col = editor
                     .cursor_col
                     .min(editor.line_len_chars(editor.cursor_row));
@@ -2484,8 +2582,8 @@ impl App {
             }
             KeyCode::PageDown => {
                 if !editor.lines.is_empty() {
-                    editor.scroll = (editor.scroll + viewport).min(editor.lines.len() - 1);
-                    editor.cursor_row = (editor.cursor_row + viewport).min(editor.lines.len() - 1);
+                    editor.scroll = (editor.scroll + jump_rows).min(editor.lines.len() - 1);
+                    editor.cursor_row = (editor.cursor_row + jump_rows).min(editor.lines.len() - 1);
                     editor.cursor_col = editor
                         .cursor_col
                         .min(editor.line_len_chars(editor.cursor_row));
@@ -2524,12 +2622,26 @@ impl App {
         }
     }
 
-    fn editor_viewport_rows(&self) -> usize {
-        // Approximate rows available for the editor's inner text area. The layout is stable:
-        // header(3) + footer(1) + content block borders(2) + editor outer borders(2)
-        // + editor hint(1) + textarea borders(2) = 11.
-        let h = self.last_size.height as usize;
-        h.saturating_sub(11).max(1)
+    fn editor_viewport_size(&self) -> Size {
+        // Matches `render()` + `render_content()` + `render_editor()` layout math in `ui.rs`.
+        let mut width = self.last_size.width.saturating_sub(30);
+        let mut height = self.last_size.height.saturating_sub(3).saturating_sub(1);
+
+        if self.filter.active || !self.filter.buffer.trim().is_empty() {
+            height = height.saturating_sub(5);
+        }
+
+        // render_editor:
+        // - outer borders (2)
+        // - key bar row (1)
+        // - field borders (2)
+        width = width.saturating_sub(2).saturating_sub(2);
+        height = height.saturating_sub(2).saturating_sub(1).saturating_sub(2);
+
+        Size {
+            width: width.max(1),
+            height: height.max(1),
+        }
     }
 
     fn clamp_selections(&mut self, data: &UiData) {

@@ -1123,21 +1123,27 @@ fn render_editor(
     let field_inner = field.inner(chunks[1]);
 
     let height = field_inner.height as usize;
-    let start = editor.scroll.min(editor.lines.len());
-    let end = (start + height).min(editor.lines.len());
-    let shown = editor.lines[start..end]
-        .iter()
-        .map(|s| Line::raw(s.clone()))
-        .collect::<Vec<_>>();
+    let width = field_inner.width.max(1);
 
-    frame.render_widget(
-        Paragraph::new(shown).wrap(Wrap { trim: false }),
-        field_inner,
-    );
+    let mut shown = Vec::new();
+    let start = editor.scroll.min(editor.lines.len().saturating_sub(1));
+    for line in editor.lines.iter().skip(start) {
+        for segment in super::app::EditorState::wrap_line_segments(line, width) {
+            if shown.len() >= height {
+                break;
+            }
+            shown.push(Line::raw(segment));
+        }
+        if shown.len() >= height {
+            break;
+        }
+    }
 
-    let row_in_view = editor.cursor_row.saturating_sub(editor.scroll);
+    frame.render_widget(Paragraph::new(shown), field_inner);
+
+    let (row_in_view, col_in_view) = editor.cursor_visual_offset_from_scroll(width);
     if row_in_view < height {
-        let x = field_inner.x + (editor.cursor_col as u16).min(field_inner.width.saturating_sub(1));
+        let x = field_inner.x + col_in_view.min(field_inner.width.saturating_sub(1));
         let y = field_inner.y + row_in_view as u16;
         frame.set_cursor_position((x, y));
     }
@@ -3493,7 +3499,10 @@ mod tests {
         app_config::AppType,
         cli::i18n::texts,
         cli::tui::{
-            app::{App, ConfirmAction, ConfirmOverlay, Focus, Overlay, TextInputState, TextSubmit},
+            app::{
+                App, ConfirmAction, ConfirmOverlay, EditorKind, EditorSubmit, Focus, Overlay,
+                TextInputState, TextSubmit,
+            },
             data::{
                 ConfigSnapshot, McpSnapshot, PromptsSnapshot, ProviderRow, ProvidersSnapshot,
                 SkillsSnapshot, UiData,
@@ -3706,6 +3715,66 @@ mod tests {
         // Table is inset by 2 cells inside the content pane.
         let selected_row_cell = &buf[(33, 3 + 1 + 1 + 1)];
         assert_eq!(selected_row_cell.bg, theme.accent);
+    }
+
+    #[test]
+    fn editor_cursor_matches_rendered_target_line() {
+        let _lock = lock_env();
+        let _no_color = EnvGuard::remove("NO_COLOR");
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Config;
+        app.focus = Focus::Content;
+
+        let long = "x".repeat(400);
+        let marker = "<<<TARGET>>>";
+        let initial = format!("{long}\n{marker}");
+
+        app.open_editor(
+            "Demo Editor",
+            EditorKind::Json,
+            initial,
+            EditorSubmit::ConfigCommonSnippet,
+        );
+
+        let editor = app.editor.as_mut().expect("editor opened");
+        editor.cursor_row = 1;
+        editor.cursor_col = 0;
+        editor.scroll = 0;
+
+        let data = minimal_data(&app.app_type);
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("terminal created");
+        terminal
+            .draw(|f| super::render(f, &app, &data))
+            .expect("draw ok");
+
+        let cursor = terminal.get_cursor_position().expect("cursor position");
+        let buf = terminal.backend().buffer().clone();
+
+        let wrap_token = "x".repeat(20);
+        let wrapped_rows = (0..buf.area.height)
+            .filter(|y| line_at(&buf, *y).contains(&wrap_token))
+            .count();
+        assert!(
+            wrapped_rows >= 2,
+            "expected long line to wrap onto multiple rows, got {wrapped_rows}"
+        );
+
+        let mut marker_y = None;
+        for y in 0..buf.area.height {
+            let line = line_at(&buf, y);
+            if line.contains(marker) {
+                marker_y = Some(y);
+                break;
+            }
+        }
+
+        let marker_y = marker_y.expect("marker line rendered");
+        assert_eq!(
+            cursor.y, marker_y,
+            "cursor should be on the same row as the rendered marker line"
+        );
     }
 
     #[test]
