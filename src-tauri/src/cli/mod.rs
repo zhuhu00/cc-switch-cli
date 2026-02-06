@@ -26,10 +26,6 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
-    /// Output in JSON format
-    #[arg(short, long, global = true)]
-    pub json: bool,
-
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
