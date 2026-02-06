@@ -3,6 +3,7 @@ use ratatui::prelude::Size;
 use std::collections::HashSet;
 
 use crate::app_config::AppType;
+use crate::cli::i18n::current_language;
 use crate::cli::i18n::texts;
 use crate::cli::i18n::Language;
 use crate::services::skill::SyncMethod;
@@ -81,6 +82,7 @@ pub enum ConfirmAction {
     ConfigImport { path: String },
     ConfigRestoreBackup { id: String },
     ConfigReset,
+    SettingsSetSkipClaudeOnboarding { enabled: bool },
     EditorDiscard,
     EditorSaveBeforeClose,
 }
@@ -457,6 +459,9 @@ pub enum Action {
     },
     EditorDiscard,
 
+    SetSkipClaudeOnboarding {
+        enabled: bool,
+    },
     SetLanguage(Language),
 }
 
@@ -485,6 +490,16 @@ impl ConfigItem {
         ConfigItem::CommonSnippet,
         ConfigItem::Reset,
     ];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsItem {
+    Language,
+    SkipClaudeOnboarding,
+}
+
+impl SettingsItem {
+    pub const ALL: [SettingsItem; 2] = [SettingsItem::Language, SettingsItem::SkipClaudeOnboarding];
 }
 
 #[derive(Debug, Clone)]
@@ -519,7 +534,7 @@ pub struct App {
     pub skills_unmanaged_results: Vec<crate::services::skill::UnmanagedSkill>,
     pub skills_unmanaged_selected: HashSet<String>,
     pub config_idx: usize,
-    pub language_idx: usize,
+    pub settings_idx: usize,
 }
 
 impl App {
@@ -553,7 +568,7 @@ impl App {
             skills_unmanaged_results: Vec::new(),
             skills_unmanaged_selected: HashSet::new(),
             config_idx: 0,
-            language_idx: 0,
+            settings_idx: 0,
         }
     }
 
@@ -1363,17 +1378,41 @@ impl App {
     }
 
     fn on_settings_key(&mut self, key: KeyEvent) -> Action {
-        let languages = [Language::English, Language::Chinese];
+        let settings_len = SettingsItem::ALL.len();
         match key.code {
             KeyCode::Up => {
-                self.language_idx = self.language_idx.saturating_sub(1);
+                self.settings_idx = self.settings_idx.saturating_sub(1);
                 Action::None
             }
             KeyCode::Down => {
-                self.language_idx = (self.language_idx + 1).min(languages.len() - 1);
+                self.settings_idx = (self.settings_idx + 1).min(settings_len - 1);
                 Action::None
             }
-            KeyCode::Enter => Action::SetLanguage(languages[self.language_idx]),
+            KeyCode::Enter => match SettingsItem::ALL.get(self.settings_idx) {
+                Some(SettingsItem::Language) => {
+                    let next = match current_language() {
+                        Language::English => Language::Chinese,
+                        Language::Chinese => Language::English,
+                    };
+                    Action::SetLanguage(next)
+                }
+                Some(SettingsItem::SkipClaudeOnboarding) => {
+                    let current = crate::settings::get_skip_claude_onboarding();
+                    let next = !current;
+                    let path = crate::config::get_claude_mcp_path();
+
+                    self.overlay = Overlay::Confirm(ConfirmOverlay {
+                        title: texts::tui_confirm_title().to_string(),
+                        message: texts::skip_claude_onboarding_confirm(
+                            next,
+                            path.to_string_lossy().as_ref(),
+                        ),
+                        action: ConfirmAction::SettingsSetSkipClaudeOnboarding { enabled: next },
+                    });
+                    Action::None
+                }
+                None => Action::None,
+            },
             _ => Action::None,
         }
     }
@@ -1428,6 +1467,9 @@ impl App {
                             Action::ConfigRestoreBackup { id: id.clone() }
                         }
                         ConfirmAction::ConfigReset => Action::ConfigReset,
+                        ConfirmAction::SettingsSetSkipClaudeOnboarding { enabled } => {
+                            Action::SetSkipClaudeOnboarding { enabled: *enabled }
+                        }
                         ConfirmAction::EditorDiscard => Action::EditorDiscard,
                         ConfirmAction::EditorSaveBeforeClose => {
                             if let Some(editor) = self.editor.as_ref() {
