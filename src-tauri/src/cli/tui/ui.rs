@@ -2663,17 +2663,29 @@ fn render_config(
 }
 
 fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &super::theme::Theme) {
-    let header = Row::new(vec![Cell::from(
-        pad2(texts::tui_settings_header_language()),
-    )])
+    let header = Row::new(vec![
+        Cell::from(pad2(texts::tui_settings_header_setting())),
+        Cell::from(pad2(texts::tui_settings_header_value())),
+    ])
     .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
 
-    let rows = [
-        crate::cli::i18n::Language::English,
-        crate::cli::i18n::Language::Chinese,
-    ]
-    .iter()
-    .map(|lang| Row::new(vec![Cell::from(pad2(lang.display_name()))]));
+    let language = crate::cli::i18n::current_language();
+    let skip_claude_onboarding = crate::settings::get_skip_claude_onboarding();
+
+    let rows = super::app::SettingsItem::ALL.iter().map(|item| match item {
+        super::app::SettingsItem::Language => Row::new(vec![
+            Cell::from(pad2(texts::tui_settings_header_language())),
+            Cell::from(pad2(language.display_name())),
+        ]),
+        super::app::SettingsItem::SkipClaudeOnboarding => Row::new(vec![
+            Cell::from(pad2(texts::skip_claude_onboarding_label())),
+            Cell::from(pad2(if skip_claude_onboarding {
+                texts::enabled()
+            } else {
+                texts::disabled()
+            })),
+        ]),
+    });
 
     let outer = Block::default()
         .borders(Borders::ALL)
@@ -2697,14 +2709,14 @@ fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &super::
         );
     }
 
-    let table = Table::new(rows, [Constraint::Min(10)])
+    let table = Table::new(rows, [Constraint::Min(24), Constraint::Min(10)])
         .header(header)
         .block(Block::default().borders(Borders::NONE))
         .row_highlight_style(selection_style(theme))
         .highlight_symbol(highlight_symbol(theme));
 
     let mut state = TableState::default();
-    state.select(Some(app.language_idx));
+    state.select(Some(app.settings_idx));
     frame.render_stateful_widget(table, inset_left(chunks[1], 2), &mut state);
 }
 

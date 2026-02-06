@@ -1511,6 +1511,22 @@ pub mod texts {
         }
     }
 
+    pub fn tui_settings_header_setting() -> &'static str {
+        if is_chinese() {
+            "设置项"
+        } else {
+            "Setting"
+        }
+    }
+
+    pub fn tui_settings_header_value() -> &'static str {
+        if is_chinese() {
+            "值"
+        } else {
+            "Value"
+        }
+    }
+
     pub fn tui_settings_title() -> &'static str {
         if is_chinese() {
             "设置"
@@ -2473,6 +2489,22 @@ pub mod texts {
                 "Repository enabled.".to_string()
             } else {
                 "Repository disabled.".to_string()
+            }
+        }
+    }
+
+    pub fn tui_toast_skip_claude_onboarding_toggled(enabled: bool) -> String {
+        if is_chinese() {
+            if enabled {
+                "已跳过 Claude Code 初次安装确认。".to_string()
+            } else {
+                "已恢复 Claude Code 初次安装确认。".to_string()
+            }
+        } else {
+            if enabled {
+                "Claude Code onboarding confirmation will be skipped.".to_string()
+            } else {
+                "Claude Code onboarding confirmation restored.".to_string()
             }
         }
     }
@@ -4787,6 +4819,14 @@ pub mod texts {
         }
     }
 
+    pub fn disabled() -> &'static str {
+        if is_chinese() {
+            "禁用"
+        } else {
+            "Disabled"
+        }
+    }
+
     pub fn active() -> &'static str {
         if is_chinese() {
             "活动"
@@ -4841,6 +4881,62 @@ pub mod texts {
             "✓ 语言已更改"
         } else {
             "✓ Language changed"
+        }
+    }
+
+    pub fn skip_claude_onboarding() -> &'static str {
+        if is_chinese() {
+            "🚫 跳过 Claude Code 初次安装确认"
+        } else {
+            "🚫 Skip Claude Code onboarding confirmation"
+        }
+    }
+
+    pub fn skip_claude_onboarding_label() -> &'static str {
+        if is_chinese() {
+            "跳过 Claude Code 初次安装确认"
+        } else {
+            "Skip Claude Code onboarding confirmation"
+        }
+    }
+
+    pub fn skip_claude_onboarding_confirm(enable: bool, path: &str) -> String {
+        if is_chinese() {
+            if enable {
+                format!(
+                    "确认启用跳过 Claude Code 初次安装确认？\n将写入 {path}: hasCompletedOnboarding=true"
+                )
+            } else {
+                format!(
+                    "确认恢复 Claude Code 初次安装确认？\n将从 {path} 删除 hasCompletedOnboarding"
+                )
+            }
+        } else {
+            if enable {
+                format!(
+                    "Enable skipping Claude Code onboarding confirmation?\nWrites hasCompletedOnboarding=true to {path}"
+                )
+            } else {
+                format!(
+                    "Disable skipping Claude Code onboarding confirmation?\nRemoves hasCompletedOnboarding from {path}"
+                )
+            }
+        }
+    }
+
+    pub fn skip_claude_onboarding_changed(enable: bool) -> String {
+        if is_chinese() {
+            if enable {
+                "✓ 已启用：跳过 Claude Code 初次安装确认".to_string()
+            } else {
+                "✓ 已恢复 Claude Code 初次安装确认".to_string()
+            }
+        } else {
+            if enable {
+                "✓ Skip Claude Code onboarding confirmation enabled".to_string()
+            } else {
+                "✓ Claude Code onboarding confirmation restored".to_string()
+            }
         }
     }
 

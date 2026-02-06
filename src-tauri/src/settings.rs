@@ -41,6 +41,9 @@ pub struct AppSettings {
     /// 是否启用 Claude 插件联动
     #[serde(default)]
     pub enable_claude_plugin_integration: bool,
+    /// 是否跳过 Claude Code 初次安装确认
+    #[serde(default)]
+    pub skip_claude_onboarding: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,6 +82,7 @@ impl Default for AppSettings {
             show_in_tray: true,
             minimize_to_tray_on_close: true,
             enable_claude_plugin_integration: false,
+            skip_claude_onboarding: false,
             claude_config_dir: None,
             codex_config_dir: None,
             gemini_config_dir: None,
@@ -261,5 +265,24 @@ pub fn get_skill_sync_method() -> crate::services::skill::SyncMethod {
 pub fn set_skill_sync_method(method: crate::services::skill::SyncMethod) -> Result<(), AppError> {
     let mut settings = get_settings();
     settings.skill_sync_method = method;
+    update_settings(settings)
+}
+
+pub fn get_skip_claude_onboarding() -> bool {
+    settings_store()
+        .read()
+        .map(|s| s.skip_claude_onboarding)
+        .unwrap_or(false)
+}
+
+pub fn set_skip_claude_onboarding(enabled: bool) -> Result<(), AppError> {
+    if enabled {
+        crate::claude_mcp::set_has_completed_onboarding()?;
+    } else {
+        crate::claude_mcp::clear_has_completed_onboarding()?;
+    }
+
+    let mut settings = get_settings();
+    settings.skip_claude_onboarding = enabled;
     update_settings(settings)
 }

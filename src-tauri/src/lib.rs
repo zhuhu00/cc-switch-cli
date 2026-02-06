@@ -45,5 +45,7 @@ pub use services::{
     ConfigService, EndpointLatency, McpService, PromptService, ProviderService, SkillService,
     SpeedtestService,
 };
-pub use settings::{update_settings, AppSettings};
+pub use settings::{
+    get_skip_claude_onboarding, set_skip_claude_onboarding, update_settings, AppSettings,
+};
 pub use store::AppState;

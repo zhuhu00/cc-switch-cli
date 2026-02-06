@@ -1099,6 +1099,15 @@ fn handle_action(
             Ok(())
         }
 
+        Action::SetSkipClaudeOnboarding { enabled } => {
+            crate::settings::set_skip_claude_onboarding(enabled)?;
+            app.push_toast(
+                texts::tui_toast_skip_claude_onboarding_toggled(enabled),
+                ToastKind::Success,
+            );
+            Ok(())
+        }
+
         Action::SetLanguage(lang) => {
             set_language(lang)?;
             app.push_toast(texts::language_changed(), ToastKind::Success);
