@@ -65,10 +65,6 @@ fn active_chip_style(theme: &super::theme::Theme) -> Style {
     }
 }
 
-fn pad2(s: &str) -> String {
-    format!("  {s}")
-}
-
 fn pad1(s: &str) -> String {
     format!(" {s}")
 }
@@ -448,7 +444,6 @@ fn nav_pane_width() -> u16 {
         .saturating_add(NAV_ICON_COL_WIDTH)
         .saturating_add(text_col_width)
 }
-
 fn render_nav(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &super::theme::Theme) {
     let rows = NavItem::ALL.iter().map(|item| {
         let (icon, text) = split_nav_label(nav_label(*item));
@@ -1513,32 +1508,49 @@ fn render_provider_add_form(
         .split(fields_inner);
 
     let fields = provider.fields();
+    let rows_data = fields
+        .iter()
+        .map(|field| provider_field_label_and_value(provider, *field))
+        .collect::<Vec<_>>();
+
+    let label_col_width = field_label_column_width(
+        fields
+            .iter()
+            .zip(rows_data.iter())
+            .filter(|(field, _row)| !matches!(field, ProviderAddField::CommonConfigDivider))
+            .map(|(_field, (label, _value))| label.as_str())
+            .chain(std::iter::once(texts::tui_header_field())),
+        1,
+    );
+
     let header = Row::new(vec![
-        Cell::from(pad2(texts::tui_header_field())),
+        Cell::from(pad1(texts::tui_header_field())),
         Cell::from(texts::tui_header_value()),
     ])
     .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
 
-    let rows = fields.iter().map(|field| {
-        if matches!(field, ProviderAddField::CommonConfigDivider) {
-            let dashes_left = "┄".repeat(40);
-            let dashes_right = "┄".repeat(200);
-            return Row::new(vec![
-                Cell::from(pad2(&dashes_left)),
-                Cell::from(dashes_right),
-            ])
-            .style(Style::default().fg(theme.dim));
-        }
+    let rows = fields
+        .iter()
+        .zip(rows_data.iter())
+        .map(|(field, (label, value))| {
+            if matches!(field, ProviderAddField::CommonConfigDivider) {
+                let dashes_left = "┄".repeat(40);
+                let dashes_right = "┄".repeat(200);
+                Row::new(vec![Cell::from(pad1(&dashes_left)), Cell::from(dashes_right)])
+                    .style(Style::default().fg(theme.dim))
+            } else {
+                Row::new(vec![Cell::from(pad1(label)), Cell::from(value.clone())])
+            }
+        });
 
-        let (label, value) = provider_field_label_and_value(provider, *field);
-        Row::new(vec![Cell::from(pad2(&label)), Cell::from(value)])
-    });
-
-    let table = Table::new(rows, [Constraint::Length(22), Constraint::Min(10)])
-        .header(header)
-        .block(Block::default().borders(Borders::NONE))
-        .row_highlight_style(selection_style(theme))
-        .highlight_symbol(highlight_symbol(theme));
+    let table = Table::new(
+        rows,
+        [Constraint::Length(label_col_width), Constraint::Min(10)],
+    )
+    .header(header)
+    .block(Block::default().borders(Borders::NONE))
+    .row_highlight_style(selection_style(theme))
+    .highlight_symbol(highlight_symbol(theme));
 
     let mut state = TableState::default();
     if !fields.is_empty() {
@@ -1883,22 +1895,37 @@ fn render_mcp_add_form(
         .split(fields_inner);
 
     let fields = mcp.fields();
+    let rows_data = fields
+        .iter()
+        .map(|field| mcp_field_label_and_value(mcp, *field))
+        .collect::<Vec<_>>();
+
+    let label_col_width = field_label_column_width(
+        rows_data
+            .iter()
+            .map(|(label, _value)| label.as_str())
+            .chain(std::iter::once(texts::tui_header_field())),
+        1,
+    );
+
     let header = Row::new(vec![
-        Cell::from(pad2(texts::tui_header_field())),
+        Cell::from(pad1(texts::tui_header_field())),
         Cell::from(texts::tui_header_value()),
     ])
     .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
 
-    let rows = fields.iter().map(|field| {
-        let (label, value) = mcp_field_label_and_value(mcp, *field);
-        Row::new(vec![Cell::from(pad2(&label)), Cell::from(value)])
-    });
+    let rows = rows_data
+        .iter()
+        .map(|(label, value)| Row::new(vec![Cell::from(pad1(label)), Cell::from(value.clone())]));
 
-    let table = Table::new(rows, [Constraint::Length(22), Constraint::Min(10)])
-        .header(header)
-        .block(Block::default().borders(Borders::NONE))
-        .row_highlight_style(selection_style(theme))
-        .highlight_symbol(highlight_symbol(theme));
+    let table = Table::new(
+        rows,
+        [Constraint::Length(label_col_width), Constraint::Min(10)],
+    )
+    .header(header)
+    .block(Block::default().borders(Borders::NONE))
+    .row_highlight_style(selection_style(theme))
+    .highlight_symbol(highlight_symbol(theme));
 
     let mut state = TableState::default();
     if !fields.is_empty() {
@@ -2041,6 +2068,18 @@ fn split_filter_area(area: Rect, app: &App) -> (Option<Rect>, Rect) {
         .split(area);
 
     (Some(chunks[0]), chunks[1])
+}
+
+fn field_label_column_width<'a, I>(labels: I, left_padding: u16) -> u16
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let max = labels
+        .into_iter()
+        .map(|label| UnicodeWidthStr::width(label) as u16)
+        .max()
+        .unwrap_or(0);
+    max.saturating_add(left_padding)
 }
 
 fn render_filter_bar(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &super::theme::Theme) {
@@ -2732,7 +2771,7 @@ fn render_mcp(
     let visible = mcp_rows_filtered(app, data);
 
     let header = Row::new(vec![
-        Cell::from(pad2(texts::header_name())),
+        Cell::from(texts::header_name()),
         Cell::from(crate::app_config::AppType::Claude.as_str()),
         Cell::from(crate::app_config::AppType::Codex.as_str()),
         Cell::from(crate::app_config::AppType::Gemini.as_str()),
@@ -2741,7 +2780,7 @@ fn render_mcp(
 
     let rows = visible.iter().map(|row| {
         Row::new(vec![
-            Cell::from(pad2(&row.server.name)),
+            Cell::from(row.server.name.clone()),
             Cell::from(if row.server.apps.claude {
                 texts::tui_marker_active()
             } else {
@@ -2955,7 +2994,7 @@ fn render_config(
     let items = config_items_filtered(app);
     let rows = items
         .iter()
-        .map(|item| Row::new(vec![Cell::from(pad2(config_item_label(item)))]));
+        .map(|item| Row::new(vec![Cell::from(config_item_label(item))]));
 
     let outer = Block::default()
         .borders(Borders::ALL)
@@ -2998,7 +3037,7 @@ fn render_config_webdav(
     let items = webdav_config_items_filtered(app);
     let rows = items
         .iter()
-        .map(|item| Row::new(vec![Cell::from(pad2(webdav_config_item_label(item)))]));
+        .map(|item| Row::new(vec![Cell::from(webdav_config_item_label(item))]));
 
     let outer = Block::default()
         .borders(Borders::ALL)
@@ -3035,29 +3074,44 @@ fn render_config_webdav(
 }
 
 fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &super::theme::Theme) {
-    let header = Row::new(vec![
-        Cell::from(pad2(texts::tui_settings_header_setting())),
-        Cell::from(pad2(texts::tui_settings_header_value())),
-    ])
-    .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
-
     let language = crate::cli::i18n::current_language();
     let skip_claude_onboarding = crate::settings::get_skip_claude_onboarding();
 
-    let rows = super::app::SettingsItem::ALL.iter().map(|item| match item {
-        super::app::SettingsItem::Language => Row::new(vec![
-            Cell::from(pad2(texts::tui_settings_header_language())),
-            Cell::from(pad2(language.display_name())),
-        ]),
-        super::app::SettingsItem::SkipClaudeOnboarding => Row::new(vec![
-            Cell::from(pad2(texts::skip_claude_onboarding_label())),
-            Cell::from(pad2(if skip_claude_onboarding {
-                texts::enabled()
-            } else {
-                texts::disabled()
-            })),
-        ]),
-    });
+    let rows_data = super::app::SettingsItem::ALL
+        .iter()
+        .map(|item| match item {
+            super::app::SettingsItem::Language => (
+                texts::tui_settings_header_language().to_string(),
+                language.display_name().to_string(),
+            ),
+            super::app::SettingsItem::SkipClaudeOnboarding => (
+                texts::skip_claude_onboarding_label().to_string(),
+                if skip_claude_onboarding {
+                    texts::enabled().to_string()
+                } else {
+                    texts::disabled().to_string()
+                },
+            ),
+        })
+        .collect::<Vec<_>>();
+
+    let label_col_width = field_label_column_width(
+        rows_data
+            .iter()
+            .map(|(label, _value)| label.as_str())
+            .chain(std::iter::once(texts::tui_settings_header_setting())),
+        0,
+    );
+
+    let header = Row::new(vec![
+        Cell::from(texts::tui_settings_header_setting()),
+        Cell::from(texts::tui_settings_header_value()),
+    ])
+    .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
+
+    let rows = rows_data
+        .iter()
+        .map(|(label, value)| Row::new(vec![Cell::from(label.clone()), Cell::from(value.clone())]));
 
     let outer = Block::default()
         .borders(Borders::ALL)
@@ -3081,11 +3135,14 @@ fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &super::
         );
     }
 
-    let table = Table::new(rows, [Constraint::Min(24), Constraint::Min(10)])
-        .header(header)
-        .block(Block::default().borders(Borders::NONE))
-        .row_highlight_style(selection_style(theme))
-        .highlight_symbol(highlight_symbol(theme));
+    let table = Table::new(
+        rows,
+        [Constraint::Length(label_col_width), Constraint::Min(10)],
+    )
+    .header(header)
+    .block(Block::default().borders(Borders::NONE))
+    .row_highlight_style(selection_style(theme))
+    .highlight_symbol(highlight_symbol(theme));
 
     let mut state = TableState::default();
     state.select(Some(app.settings_idx));
@@ -3529,8 +3586,16 @@ fn render_overlay(frame: &mut Frame<'_>, app: &App, data: &UiData, theme: &super
                     texts::tui_claude_default_opus_model_label(),
                 ];
 
+                let label_col_width = field_label_column_width(
+                    labels
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(texts::tui_header_field())),
+                    1,
+                );
+
                 let header = Row::new(vec![
-                    Cell::from(pad2(texts::tui_header_field())),
+                    Cell::from(pad1(texts::tui_header_field())),
                     Cell::from(texts::tui_header_value()),
                 ])
                 .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
@@ -3541,18 +3606,21 @@ fn render_overlay(frame: &mut Frame<'_>, app: &App, data: &UiData, theme: &super
                         .map(|input| input.value.trim().to_string())
                         .filter(|value| !value.is_empty())
                         .unwrap_or_else(|| texts::tui_na().to_string());
-                    Row::new(vec![Cell::from(pad2(label)), Cell::from(value)])
+                    Row::new(vec![Cell::from(pad1(label)), Cell::from(value)])
                 });
 
-                let table = Table::new(rows, [Constraint::Length(29), Constraint::Min(10)])
-                    .header(header)
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(texts::tui_form_fields_title()),
-                    )
-                    .row_highlight_style(selection_style(theme))
-                    .highlight_symbol(highlight_symbol(theme));
+                let table = Table::new(
+                    rows,
+                    [Constraint::Length(label_col_width), Constraint::Min(10)],
+                )
+                .header(header)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(texts::tui_form_fields_title()),
+                )
+                .row_highlight_style(selection_style(theme))
+                .highlight_symbol(highlight_symbol(theme));
 
                 let mut state = TableState::default();
                 state.select(Some((*selected).min(labels.len().saturating_sub(1))));
@@ -4170,9 +4238,8 @@ mod tests {
         // - hint row (1)
         // - table header row (1)
         // - first data row (selected) (1)
-        // Table is inset by 2 cells inside the content pane.
         let selected_row_cell = &buf[(
-            content.x.saturating_add(3),
+            content.x.saturating_add(2 + super::CONTENT_INSET_LEFT),
             content.y.saturating_add(1 + 1 + 1),
         )];
         assert_eq!(selected_row_cell.bg, theme.accent);
