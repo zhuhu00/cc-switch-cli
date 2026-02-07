@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use indexmap::IndexMap;
 use serde_json::Value;
 
-use crate::app_config::{AppType, McpServer};
+use crate::app_config::{AppType, CommonConfigSnippets, McpServer};
 use crate::error::AppError;
 use crate::prompt::Prompt;
 use crate::provider::Provider;
@@ -53,6 +53,7 @@ pub struct ConfigSnapshot {
     pub config_dir: PathBuf,
     pub backups: Vec<BackupInfo>,
     pub common_snippet: String,
+    pub common_snippets: CommonConfigSnippets,
     pub webdav_sync: Option<crate::settings::WebDavSyncSettings>,
 }
 
@@ -198,20 +199,19 @@ fn load_config_snapshot(state: &AppState, app_type: &AppType) -> Result<ConfigSn
     let config_dir = crate::config::get_app_config_dir();
     let config_path = config_dir.join("cc-switch.db");
     let backups = ConfigService::list_backups(&config_path)?;
-    let common_snippet = state
-        .config
-        .read()
-        .map_err(AppError::from)?
-        .common_config_snippets
-        .get(app_type)
-        .cloned()
-        .unwrap_or_default();
+    let (common_snippet, common_snippets) = {
+        let guard = state.config.read().map_err(AppError::from)?;
+        let common_snippets = guard.common_config_snippets.clone();
+        let common_snippet = common_snippets.get(app_type).cloned().unwrap_or_default();
+        (common_snippet, common_snippets)
+    };
 
     Ok(ConfigSnapshot {
         config_path,
         config_dir,
         backups,
         common_snippet,
+        common_snippets,
         webdav_sync: crate::settings::get_webdav_sync_settings(),
     })
 }

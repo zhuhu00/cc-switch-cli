@@ -115,6 +115,21 @@ pub enum FormFocus {
     JsonPreview,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexPreviewSection {
+    Auth,
+    Config,
+}
+
+impl CodexPreviewSection {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Auth => Self::Config,
+            Self::Config => Self::Auth,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormMode {
     Add,
@@ -146,6 +161,8 @@ pub enum ProviderAddField {
     GeminiApiKey,
     GeminiBaseUrl,
     GeminiModel,
+    CommonConfigDivider,
+    CommonSnippet,
     IncludeCommonConfig,
 }
 
@@ -261,6 +278,9 @@ pub struct ProviderAddFormState {
     pub notes: TextInput,
     pub include_common_config: bool,
     pub json_scroll: usize,
+    pub codex_preview_section: CodexPreviewSection,
+    pub codex_auth_scroll: usize,
+    pub codex_config_scroll: usize,
     claude_model_config_touched: bool,
 
     // Claude
@@ -316,6 +336,9 @@ impl ProviderAddFormState {
             notes: TextInput::new(""),
             include_common_config: true,
             json_scroll: 0,
+            codex_preview_section: CodexPreviewSection::Auth,
+            codex_auth_scroll: 0,
+            codex_config_scroll: 0,
             claude_model_config_touched: false,
 
             claude_api_key: TextInput::new(""),
@@ -538,6 +561,8 @@ impl ProviderAddFormState {
             }
         }
 
+        fields.push(ProviderAddField::CommonConfigDivider);
+        fields.push(ProviderAddField::CommonSnippet);
         fields.push(ProviderAddField::IncludeCommonConfig);
         fields
     }
@@ -561,6 +586,8 @@ impl ProviderAddFormState {
             | ProviderAddField::CodexRequiresOpenaiAuth
             | ProviderAddField::ClaudeModelConfig
             | ProviderAddField::GeminiAuthType
+            | ProviderAddField::CommonConfigDivider
+            | ProviderAddField::CommonSnippet
             | ProviderAddField::IncludeCommonConfig => None,
         }
     }
@@ -584,6 +611,8 @@ impl ProviderAddFormState {
             | ProviderAddField::CodexRequiresOpenaiAuth
             | ProviderAddField::ClaudeModelConfig
             | ProviderAddField::GeminiAuthType
+            | ProviderAddField::CommonConfigDivider
+            | ProviderAddField::CommonSnippet
             | ProviderAddField::IncludeCommonConfig => None,
         }
     }
@@ -655,6 +684,9 @@ impl ProviderAddFormState {
                     self.website_url = defaults.website_url;
                     self.notes = defaults.notes;
                     self.json_scroll = defaults.json_scroll;
+                    self.codex_preview_section = defaults.codex_preview_section;
+                    self.codex_auth_scroll = defaults.codex_auth_scroll;
+                    self.codex_config_scroll = defaults.codex_config_scroll;
                     self.claude_model_config_touched = defaults.claude_model_config_touched;
                     self.claude_api_key = defaults.claude_api_key;
                     self.claude_base_url = defaults.claude_base_url;
@@ -864,30 +896,55 @@ impl ProviderAddFormState {
                     self.codex_model.value.trim()
                 };
 
-                let config_toml = build_codex_provider_config_toml(
-                    &provider_key,
+                let wire_api = self.codex_wire_api;
+                let requires_openai_auth = self.codex_requires_openai_auth;
+                let env_key = self.codex_env_key.value.trim();
+
+                let existing_config = settings_obj
+                    .get("config")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let base_config = if existing_config.trim().is_empty() {
+                    build_codex_provider_config_toml(&provider_key, base_url, model, wire_api)
+                } else {
+                    existing_config.to_string()
+                };
+                let config_toml = update_codex_config_snippet(
+                    &base_config,
                     base_url,
                     model,
-                    CodexWireApi::Responses,
+                    wire_api,
+                    requires_openai_auth,
+                    env_key,
                 );
                 settings_obj.insert("config".to_string(), Value::String(config_toml));
 
                 if self.is_codex_official_provider() {
                     settings_obj.remove("auth");
-                } else if self.codex_api_key.is_blank() {
-                    settings_obj.remove("auth");
                 } else {
-                    let auth = settings_obj
-                        .entry("auth".to_string())
-                        .or_insert_with(|| json!({}));
-                    if !auth.is_object() {
-                        *auth = json!({});
+                    let api_key = self.codex_api_key.value.trim();
+                    if api_key.is_empty() {
+                        if let Some(auth_obj) = settings_obj
+                            .get_mut("auth")
+                            .and_then(|value| value.as_object_mut())
+                        {
+                            auth_obj.remove("OPENAI_API_KEY");
+                            if auth_obj.is_empty() {
+                                settings_obj.remove("auth");
+                            }
+                        } else {
+                            settings_obj.remove("auth");
+                        }
+                    } else {
+                        let auth = settings_obj
+                            .entry("auth".to_string())
+                            .or_insert_with(|| json!({}));
+                        if !auth.is_object() {
+                            *auth = json!({});
+                        }
+                        let obj = auth.as_object_mut().expect("auth must be a JSON object");
+                        obj.insert("OPENAI_API_KEY".to_string(), json!(api_key));
                     }
-                    let obj = auth.as_object_mut().expect("auth must be a JSON object");
-                    obj.insert(
-                        "OPENAI_API_KEY".to_string(),
-                        json!(self.codex_api_key.value.trim()),
-                    );
                 }
             }
             AppType::Gemini => {
@@ -988,6 +1045,9 @@ impl ProviderAddFormState {
         let previous_template_idx = self.template_idx;
         let previous_field_idx = self.field_idx;
         let previous_json_scroll = self.json_scroll;
+        let previous_codex_preview_section = self.codex_preview_section;
+        let previous_codex_auth_scroll = self.codex_auth_scroll;
+        let previous_codex_config_scroll = self.codex_config_scroll;
         let previous_include_common_config = self.include_common_config;
         let previous_extra = self.extra.clone();
 
@@ -1010,6 +1070,9 @@ impl ProviderAddFormState {
         next.focus = previous_focus;
         next.template_idx = previous_template_idx;
         next.json_scroll = previous_json_scroll;
+        next.codex_preview_section = previous_codex_preview_section;
+        next.codex_auth_scroll = previous_codex_auth_scroll;
+        next.codex_config_scroll = previous_codex_config_scroll;
         next.editing = false;
         let fields_len = next.fields().len();
         next.field_idx = if fields_len == 0 {
@@ -1035,6 +1098,9 @@ impl ProviderAddFormState {
         let previous_template_idx = self.template_idx;
         let previous_field_idx = self.field_idx;
         let previous_json_scroll = self.json_scroll;
+        let previous_codex_preview_section = self.codex_preview_section;
+        let previous_codex_auth_scroll = self.codex_auth_scroll;
+        let previous_codex_config_scroll = self.codex_config_scroll;
         let previous_include_common_config = self.include_common_config;
 
         // Preserve internal provider fields (e.g. meta/applyCommonConfig, partner flags) that are
@@ -1069,6 +1135,9 @@ impl ProviderAddFormState {
         next.focus = previous_focus;
         next.template_idx = previous_template_idx;
         next.json_scroll = previous_json_scroll;
+        next.codex_preview_section = previous_codex_preview_section;
+        next.codex_auth_scroll = previous_codex_auth_scroll;
+        next.codex_config_scroll = previous_codex_config_scroll;
         next.editing = false;
 
         let fields_len = next.fields().len();
@@ -1378,11 +1447,16 @@ fn update_codex_config_snippet(
         toml_set_string(&mut lines, "env_key", Some(env_key));
     }
 
-    lines
-        .into_iter()
-        .filter(|line| !line.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+    // Keep user formatting/comments; only trim leading/trailing empty lines after updates.
+    let mut start = 0;
+    while start < lines.len() && lines[start].trim().is_empty() {
+        start += 1;
+    }
+    let mut end = lines.len();
+    while end > start && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    lines[start..end].join("\n")
 }
 
 fn non_empty(value: &str) -> Option<&str> {
@@ -2095,6 +2169,47 @@ mod tests {
         assert!(cfg.contains("wire_api = \"responses\""));
         assert!(cfg.contains("requires_openai_auth = true"));
         assert!(cfg.contains("disable_response_storage = true"));
+    }
+
+    #[test]
+    fn provider_add_form_codex_preserves_existing_config_toml_custom_keys() {
+        let provider = crate::provider::Provider::with_id(
+            "c1".to_string(),
+            "Codex Provider".to_string(),
+            json!({
+                "auth": {
+                    "OPENAI_API_KEY": "sk-test"
+                },
+                "config": r#"
+model_provider = "custom"
+model = "gpt-5.2-codex"
+network_access = true
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://api.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+"#,
+            }),
+            None,
+        );
+
+        let mut form = ProviderAddFormState::from_provider(AppType::Codex, &provider);
+        form.codex_base_url.set("https://changed.example/v1");
+
+        let out = form.to_provider_json_value();
+        let cfg = out["settingsConfig"]["config"]
+            .as_str()
+            .expect("settingsConfig.config should be string");
+        assert!(
+            cfg.contains("network_access = true"),
+            "existing Codex config.toml keys should be preserved"
+        );
+        assert!(
+            cfg.contains("base_url = \"https://changed.example/v1\""),
+            "Codex base_url form field should still update config.toml"
+        );
     }
 
     #[test]

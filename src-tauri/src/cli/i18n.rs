@@ -1044,6 +1044,22 @@ pub mod texts {
         "JSON"
     }
 
+    pub fn tui_codex_auth_json_title() -> &'static str {
+        if is_chinese() {
+            "auth.json (JSON) *"
+        } else {
+            "auth.json (JSON) *"
+        }
+    }
+
+    pub fn tui_codex_config_toml_title() -> &'static str {
+        if is_chinese() {
+            "config.toml (TOML)"
+        } else {
+            "config.toml (TOML)"
+        }
+    }
+
     pub fn tui_form_input_title() -> &'static str {
         if is_chinese() {
             "输入"
@@ -1161,6 +1177,14 @@ pub mod texts {
             "官方无需填写 API Key，直接保存即可。"
         } else {
             "Official provider doesn't require an API key. Just save."
+        }
+    }
+
+    pub fn tui_toast_codex_official_auth_json_disabled() -> &'static str {
+        if is_chinese() {
+            "官方模式下不支持编辑 auth.json（切换时会移除）。"
+        } else {
+            "auth.json editing is disabled for the official provider (it will be removed on switch)."
         }
     }
 
@@ -1318,9 +1342,9 @@ pub mod texts {
 
     pub fn tui_key_focus() -> &'static str {
         if is_chinese() {
-            "焦点"
+            "切换窗口"
         } else {
-            "focus"
+            "next pane"
         }
     }
 
@@ -3161,51 +3185,81 @@ pub mod texts {
     }
 
     pub fn menu_home() -> &'static str {
+        let (en, zh) = menu_home_variants();
         if is_chinese() {
-            "🏠 首页"
+            zh
         } else {
-            "🏠 Home"
+            en
         }
+    }
+
+    pub fn menu_home_variants() -> (&'static str, &'static str) {
+        ("🏠 Home", "🏠 首页")
     }
 
     pub fn menu_manage_providers() -> &'static str {
+        let (en, zh) = menu_manage_providers_variants();
         if is_chinese() {
-            "🔌 供应商"
+            zh
         } else {
-            "🔌 Providers"
+            en
         }
+    }
+
+    pub fn menu_manage_providers_variants() -> (&'static str, &'static str) {
+        ("🔌 Providers", "🔌 供应商")
     }
 
     pub fn menu_manage_mcp() -> &'static str {
+        let (en, zh) = menu_manage_mcp_variants();
         if is_chinese() {
-            "🛠️ MCP 服务器"
+            zh
         } else {
-            "🛠️ MCP Servers"
+            en
         }
+    }
+
+    pub fn menu_manage_mcp_variants() -> (&'static str, &'static str) {
+        ("🛠️ MCP Servers", "🛠️ MCP 服务器")
     }
 
     pub fn menu_manage_prompts() -> &'static str {
+        let (en, zh) = menu_manage_prompts_variants();
         if is_chinese() {
-            "💬 提示词"
+            zh
         } else {
-            "💬 Prompts"
+            en
         }
+    }
+
+    pub fn menu_manage_prompts_variants() -> (&'static str, &'static str) {
+        ("💬 Prompts", "💬 提示词")
     }
 
     pub fn menu_manage_config() -> &'static str {
+        let (en, zh) = menu_manage_config_variants();
         if is_chinese() {
-            "⚙️ 配置"
+            zh
         } else {
-            "⚙️ Configuration"
+            en
         }
     }
 
+    pub fn menu_manage_config_variants() -> (&'static str, &'static str) {
+        ("⚙️ Configuration", "⚙️ 配置")
+    }
+
     pub fn menu_manage_skills() -> &'static str {
+        let (en, zh) = menu_manage_skills_variants();
         if is_chinese() {
-            "🧩 技能"
+            zh
         } else {
-            "🧩 Skills"
+            en
         }
+    }
+
+    pub fn menu_manage_skills_variants() -> (&'static str, &'static str) {
+        ("🧩 Skills", "🧩 技能")
     }
 
     // Legacy interactive menu item (not used in ratatui TUI navigation).
@@ -3226,19 +3280,29 @@ pub mod texts {
     }
 
     pub fn menu_settings() -> &'static str {
+        let (en, zh) = menu_settings_variants();
         if is_chinese() {
-            "⚙️ 设置"
+            zh
         } else {
-            "⚙️ Settings"
+            en
         }
     }
 
+    pub fn menu_settings_variants() -> (&'static str, &'static str) {
+        ("⚙️ Settings", "⚙️ 设置")
+    }
+
     pub fn menu_exit() -> &'static str {
+        let (en, zh) = menu_exit_variants();
         if is_chinese() {
-            "🚪 退出"
+            zh
         } else {
-            "🚪 Exit"
+            en
         }
+    }
+
+    pub fn menu_exit_variants() -> (&'static str, &'static str) {
+        ("🚪 Exit", "🚪 退出")
     }
 
     // ============================================

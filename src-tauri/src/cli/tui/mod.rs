@@ -11,6 +11,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, KeyEventKind};
+use serde_json::json;
 use serde_json::Value;
 
 use crate::app_config::AppType;
@@ -795,6 +796,115 @@ fn handle_action(
                 app.editor = None;
                 Ok(())
             }
+            EditorSubmit::ProviderFormApplyCodexAuth => {
+                let auth_value: serde_json::Value = match serde_json::from_str(&content) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        app.push_toast(
+                            texts::tui_toast_invalid_json(&e.to_string()),
+                            ToastKind::Error,
+                        );
+                        return Ok(());
+                    }
+                };
+
+                if !auth_value.is_object() {
+                    app.push_toast(texts::tui_toast_json_must_be_object(), ToastKind::Error);
+                    return Ok(());
+                }
+
+                let provider_value = match app.form.as_ref() {
+                    Some(FormState::ProviderAdd(form)) => {
+                        let mut provider_value = form.to_provider_json_value();
+                        if let Some(settings_value) = provider_value
+                            .as_object_mut()
+                            .and_then(|obj| obj.get_mut("settingsConfig"))
+                        {
+                            if !settings_value.is_object() {
+                                *settings_value = json!({});
+                            }
+                            if let Some(settings_obj) = settings_value.as_object_mut() {
+                                settings_obj.insert("auth".to_string(), auth_value);
+                            }
+                        }
+                        Some(provider_value)
+                    }
+                    _ => None,
+                };
+
+                if let Some(provider_value) = provider_value {
+                    let apply_result = match app.form.as_mut() {
+                        Some(FormState::ProviderAdd(form)) => {
+                            form.apply_provider_json_value_to_fields(provider_value)
+                        }
+                        _ => Ok(()),
+                    };
+
+                    if let Err(err) = apply_result {
+                        app.push_toast(err, ToastKind::Error);
+                        return Ok(());
+                    }
+                }
+
+                app.editor = None;
+                Ok(())
+            }
+            EditorSubmit::ProviderFormApplyCodexConfigToml => {
+                use toml_edit::DocumentMut;
+
+                let config_text = if content.trim().is_empty() {
+                    String::new()
+                } else {
+                    let doc: DocumentMut = match content.parse() {
+                        Ok(doc) => doc,
+                        Err(e) => {
+                            app.push_toast(
+                                texts::common_config_snippet_invalid_toml(&e.to_string()),
+                                ToastKind::Error,
+                            );
+                            return Ok(());
+                        }
+                    };
+                    doc.to_string()
+                };
+
+                let provider_value = match app.form.as_ref() {
+                    Some(FormState::ProviderAdd(form)) => {
+                        let mut provider_value = form.to_provider_json_value();
+                        if let Some(settings_value) = provider_value
+                            .as_object_mut()
+                            .and_then(|obj| obj.get_mut("settingsConfig"))
+                        {
+                            if !settings_value.is_object() {
+                                *settings_value = json!({});
+                            }
+                            if let Some(settings_obj) = settings_value.as_object_mut() {
+                                settings_obj
+                                    .insert("config".to_string(), Value::String(config_text));
+                            }
+                        }
+                        Some(provider_value)
+                    }
+                    _ => None,
+                };
+
+                if let Some(provider_value) = provider_value {
+                    let apply_result = match app.form.as_mut() {
+                        Some(FormState::ProviderAdd(form)) => {
+                            form.apply_provider_json_value_to_fields(provider_value)
+                        }
+                        _ => Ok(()),
+                    };
+
+                    if let Err(err) = apply_result {
+                        app.push_toast(err, ToastKind::Error);
+                        return Ok(());
+                    }
+                }
+
+                app.editor = None;
+                Ok(())
+            }
             EditorSubmit::ProviderAdd => {
                 let provider: Provider = match serde_json::from_str(&content) {
                     Ok(p) => p,
@@ -929,11 +1039,11 @@ fn handle_action(
                 *data = UiData::load(&app.app_type)?;
                 Ok(())
             }
-            EditorSubmit::ConfigCommonSnippet => {
+            EditorSubmit::ConfigCommonSnippet { app_type } => {
                 let edited = content.trim().to_string();
                 let (next_snippet, toast) = if edited.is_empty() {
                     (None, texts::common_config_snippet_cleared())
-                } else if matches!(app.app_type, AppType::Codex) {
+                } else if matches!(app_type, AppType::Codex) {
                     let doc: toml_edit::DocumentMut = match edited.parse() {
                         Ok(v) => v,
                         Err(e) => {
@@ -986,7 +1096,8 @@ fn handle_action(
                             return Ok(());
                         }
                     };
-                    cfg.common_config_snippets.set(&app.app_type, next_snippet);
+                    cfg.common_config_snippets
+                        .set(&app_type, next_snippet.clone());
                 }
                 if let Err(err) = state.save() {
                     app.push_toast(err.to_string(), ToastKind::Error);
@@ -998,16 +1109,17 @@ fn handle_action(
                 *data = UiData::load(&app.app_type)?;
 
                 // Bring the user back to the snippet preview overlay.
-                let snippet = if data.config.common_snippet.trim().is_empty() {
-                    texts::tui_default_common_snippet_for_app(app.app_type.as_str()).to_string()
-                } else {
-                    data.config.common_snippet.clone()
-                };
-                app.overlay = Overlay::CommonSnippetView(TextViewState {
-                    title: texts::tui_common_snippet_title(app.app_type.as_str()),
-                    lines: snippet.lines().map(|s| s.to_string()).collect(),
-                    scroll: 0,
+                let snippet = next_snippet.unwrap_or_else(|| {
+                    texts::tui_default_common_snippet_for_app(app_type.as_str()).to_string()
                 });
+                app.overlay = Overlay::CommonSnippetView {
+                    app_type: app_type.clone(),
+                    view: TextViewState {
+                        title: texts::tui_common_snippet_title(app_type.as_str()),
+                        lines: snippet.lines().map(|s| s.to_string()).collect(),
+                        scroll: 0,
+                    },
+                };
                 Ok(())
             }
             EditorSubmit::ConfigWebDavSettings => {
@@ -1311,11 +1423,11 @@ fn handle_action(
             app.push_toast(texts::tui_toast_validation_passed(), ToastKind::Success);
             Ok(())
         }
-        Action::ConfigCommonSnippetClear => {
+        Action::ConfigCommonSnippetClear { app_type } => {
             let state = load_state()?;
             {
                 let mut cfg = state.config.write().map_err(AppError::from)?;
-                cfg.common_config_snippets.set(&app.app_type, None);
+                cfg.common_config_snippets.set(&app_type, None);
             }
             state.save()?;
 
@@ -1324,9 +1436,9 @@ fn handle_action(
             refresh_common_snippet_overlay(app, data);
             Ok(())
         }
-        Action::ConfigCommonSnippetApply => {
+        Action::ConfigCommonSnippetApply { app_type } => {
             let state = load_state()?;
-            let current_id = ProviderService::current(&state, app.app_type.clone())?;
+            let current_id = ProviderService::current(&state, app_type.clone())?;
             if current_id.trim().is_empty() {
                 app.push_toast(
                     texts::common_config_snippet_no_current_provider(),
@@ -1334,7 +1446,7 @@ fn handle_action(
                 );
                 return Ok(());
             }
-            ProviderService::switch(&state, app.app_type.clone(), &current_id)?;
+            ProviderService::switch(&state, app_type.clone(), &current_id)?;
             app.push_toast(texts::common_config_snippet_applied(), ToastKind::Success);
             *data = UiData::load(&app.app_type)?;
             Ok(())
@@ -1536,17 +1648,26 @@ fn update_webdav_last_error(last_error: Option<String>) {
 }
 
 fn refresh_common_snippet_overlay(app: &mut App, data: &UiData) {
-    let Overlay::CommonSnippetView(view) = &mut app.overlay else {
+    let Overlay::CommonSnippetView { app_type, view } = &mut app.overlay else {
         return;
     };
 
-    let snippet = if data.config.common_snippet.trim().is_empty() {
-        texts::tui_default_common_snippet_for_app(app.app_type.as_str()).to_string()
-    } else {
+    let snippet = if app_type == &app.app_type {
         data.config.common_snippet.clone()
+    } else {
+        data.config
+            .common_snippets
+            .get(app_type)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let snippet = if snippet.trim().is_empty() {
+        texts::tui_default_common_snippet_for_app(app_type.as_str()).to_string()
+    } else {
+        snippet
     };
 
-    view.title = texts::tui_common_snippet_title(app.app_type.as_str());
+    view.title = texts::tui_common_snippet_title(app_type.as_str());
     view.lines = snippet.lines().map(|s| s.to_string()).collect();
     view.scroll = 0;
 }

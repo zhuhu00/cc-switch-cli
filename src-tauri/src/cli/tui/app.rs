@@ -134,7 +134,13 @@ pub enum Overlay {
         selected: usize,
     },
     TextView(TextViewState),
-    CommonSnippetView(TextViewState),
+    CommonSnippetPicker {
+        selected: usize,
+    },
+    CommonSnippetView {
+        app_type: AppType,
+        view: TextViewState,
+    },
     ClaudeModelPicker {
         selected: usize,
         editing: bool,
@@ -178,11 +184,13 @@ pub enum EditorKind {
 pub enum EditorSubmit {
     PromptEdit { id: String },
     ProviderFormApplyJson,
+    ProviderFormApplyCodexAuth,
+    ProviderFormApplyCodexConfigToml,
     ProviderAdd,
     ProviderEdit { id: String },
     McpAdd,
     McpEdit { id: String },
-    ConfigCommonSnippet,
+    ConfigCommonSnippet { app_type: AppType },
     ConfigWebDavSettings,
 }
 
@@ -550,8 +558,12 @@ pub enum Action {
     },
     ConfigShowFull,
     ConfigValidate,
-    ConfigCommonSnippetClear,
-    ConfigCommonSnippetApply,
+    ConfigCommonSnippetClear {
+        app_type: AppType,
+    },
+    ConfigCommonSnippetApply {
+        app_type: AppType,
+    },
     ConfigWebDavCheckConnection,
     ConfigWebDavUpload,
     ConfigWebDavDownload,
@@ -1421,23 +1433,9 @@ impl App {
                     return Action::None;
                 };
                 if matches!(item, ConfigItem::CommonSnippet) {
-                    let snippet = if data.config.common_snippet.trim().is_empty() {
-                        texts::tui_default_common_snippet_for_app(self.app_type.as_str())
-                            .to_string()
-                    } else {
-                        data.config.common_snippet.clone()
+                    self.overlay = Overlay::CommonSnippetPicker {
+                        selected: snippet_picker_index_for_app_type(&self.app_type),
                     };
-                    let kind = if matches!(self.app_type, AppType::Codex) {
-                        EditorKind::Plain
-                    } else {
-                        EditorKind::Json
-                    };
-                    self.open_editor(
-                        texts::tui_common_snippet_title(self.app_type.as_str()),
-                        kind,
-                        snippet,
-                        EditorSubmit::ConfigCommonSnippet,
-                    );
                 }
                 Action::None
             }
@@ -1502,17 +1500,9 @@ impl App {
                     }
                     ConfigItem::Validate => Action::ConfigValidate,
                     ConfigItem::CommonSnippet => {
-                        let snippet = if data.config.common_snippet.trim().is_empty() {
-                            texts::tui_default_common_snippet_for_app(self.app_type.as_str())
-                                .to_string()
-                        } else {
-                            data.config.common_snippet.clone()
+                        self.overlay = Overlay::CommonSnippetPicker {
+                            selected: snippet_picker_index_for_app_type(&self.app_type),
                         };
-                        self.overlay = Overlay::CommonSnippetView(TextViewState {
-                            title: texts::tui_common_snippet_title(self.app_type.as_str()),
-                            lines: snippet.lines().map(|s| s.to_string()).collect(),
-                            scroll: 0,
-                        });
                         Action::None
                     }
                     ConfigItem::WebDavSync => self.push_route_and_switch(Route::ConfigWebDav),
@@ -1651,15 +1641,19 @@ impl App {
 
     fn on_overlay_key(&mut self, key: KeyEvent, data: &UiData) -> Action {
         if matches!(key.code, KeyCode::Char('e')) {
-            if let Overlay::CommonSnippetView(view) = &self.overlay {
-                let initial = view.lines.join("\n");
-                self.open_editor(
-                    texts::tui_common_snippet_title(self.app_type.as_str()),
-                    EditorKind::Json,
-                    initial,
-                    EditorSubmit::ConfigCommonSnippet,
-                );
-                return Action::None;
+            match &self.overlay {
+                Overlay::CommonSnippetPicker { selected } => {
+                    let app_type = snippet_picker_app_type(*selected);
+                    self.open_common_snippet_editor(app_type, data, None);
+                    return Action::None;
+                }
+                Overlay::CommonSnippetView { app_type, view } => {
+                    let app_type = app_type.clone();
+                    let initial = view.lines.join("\n");
+                    self.open_common_snippet_editor(app_type, data, Some(initial));
+                    return Action::None;
+                }
+                _ => {}
             }
         }
 
@@ -1934,9 +1928,33 @@ impl App {
                 }
                 _ => Action::None,
             },
-            Overlay::CommonSnippetView(view) => match key.code {
-                KeyCode::Char('a') => Action::ConfigCommonSnippetApply,
-                KeyCode::Char('c') => Action::ConfigCommonSnippetClear,
+            Overlay::CommonSnippetPicker { selected } => match key.code {
+                KeyCode::Esc => {
+                    self.overlay = Overlay::None;
+                    Action::None
+                }
+                KeyCode::Up => {
+                    *selected = selected.saturating_sub(1);
+                    Action::None
+                }
+                KeyCode::Down => {
+                    *selected = (*selected + 1).min(2);
+                    Action::None
+                }
+                KeyCode::Enter => {
+                    let app_type = snippet_picker_app_type(*selected);
+                    self.open_common_snippet_view(app_type, data);
+                    Action::None
+                }
+                _ => Action::None,
+            },
+            Overlay::CommonSnippetView { app_type, view } => match key.code {
+                KeyCode::Char('a') => Action::ConfigCommonSnippetApply {
+                    app_type: app_type.clone(),
+                },
+                KeyCode::Char('c') => Action::ConfigCommonSnippetClear {
+                    app_type: app_type.clone(),
+                },
                 KeyCode::Esc | KeyCode::Char('q') => {
                     self.overlay = Overlay::None;
                     Action::None
@@ -2159,23 +2177,62 @@ impl App {
         self.editor = Some(EditorState::new(title, kind, submit, initial));
     }
 
-    fn open_common_snippet_editor(&mut self, data: &UiData) {
-        let snippet = if data.config.common_snippet.trim().is_empty() {
-            texts::tui_default_common_snippet_for_app(self.app_type.as_str()).to_string()
-        } else {
+    fn common_snippet_text_for(&self, app_type: &AppType, data: &UiData) -> String {
+        if app_type == &self.app_type {
             data.config.common_snippet.clone()
+        } else {
+            data.config
+                .common_snippets
+                .get(app_type)
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
+
+    fn open_common_snippet_view(&mut self, app_type: AppType, data: &UiData) {
+        let snippet = self.common_snippet_text_for(&app_type, data);
+        let snippet = if snippet.trim().is_empty() {
+            texts::tui_default_common_snippet_for_app(app_type.as_str()).to_string()
+        } else {
+            snippet
         };
 
-        let kind = if matches!(self.app_type, AppType::Codex) {
+        self.overlay = Overlay::CommonSnippetView {
+            app_type: app_type.clone(),
+            view: TextViewState {
+                title: texts::tui_common_snippet_title(app_type.as_str()),
+                lines: snippet.lines().map(|s| s.to_string()).collect(),
+                scroll: 0,
+            },
+        };
+    }
+
+    fn open_common_snippet_editor(
+        &mut self,
+        app_type: AppType,
+        data: &UiData,
+        initial_override: Option<String>,
+    ) {
+        let snippet = initial_override.unwrap_or_else(|| {
+            let snippet = self.common_snippet_text_for(&app_type, data);
+            if snippet.trim().is_empty() {
+                texts::tui_default_common_snippet_for_app(app_type.as_str()).to_string()
+            } else {
+                snippet
+            }
+        });
+
+        let kind = if matches!(app_type, AppType::Codex) {
             EditorKind::Plain
         } else {
             EditorKind::Json
         };
+
         self.open_editor(
-            texts::tui_common_snippet_title(self.app_type.as_str()),
+            texts::tui_common_snippet_title(app_type.as_str()),
             kind,
             snippet,
-            EditorSubmit::ConfigCommonSnippet,
+            EditorSubmit::ConfigCommonSnippet { app_type },
         );
     }
 
@@ -2226,14 +2283,71 @@ impl App {
         if matches!(key.code, KeyCode::Tab) {
             match form {
                 FormState::ProviderAdd(provider) => {
-                    provider.focus = match (&provider.mode, provider.focus) {
-                        (FormMode::Add, FormFocus::Templates) => FormFocus::Fields,
-                        (FormMode::Add, FormFocus::Fields) => FormFocus::JsonPreview,
-                        (FormMode::Add, FormFocus::JsonPreview) => FormFocus::Templates,
-                        (FormMode::Edit { .. }, FormFocus::Fields) => FormFocus::JsonPreview,
-                        (FormMode::Edit { .. }, FormFocus::JsonPreview) => FormFocus::Fields,
-                        (FormMode::Edit { .. }, FormFocus::Templates) => FormFocus::Fields,
-                    };
+                    if matches!(provider.app_type, AppType::Codex) {
+                        match (
+                            &provider.mode,
+                            provider.focus,
+                            provider.codex_preview_section,
+                        ) {
+                            (FormMode::Add, FormFocus::Templates, _) => {
+                                provider.focus = FormFocus::Fields;
+                            }
+                            (FormMode::Add, FormFocus::Fields, _) => {
+                                provider.focus = FormFocus::JsonPreview;
+                                provider.codex_preview_section =
+                                    super::form::CodexPreviewSection::Auth;
+                            }
+                            (
+                                FormMode::Add,
+                                FormFocus::JsonPreview,
+                                super::form::CodexPreviewSection::Auth,
+                            ) => {
+                                provider.focus = FormFocus::JsonPreview;
+                                provider.codex_preview_section =
+                                    super::form::CodexPreviewSection::Config;
+                            }
+                            (
+                                FormMode::Add,
+                                FormFocus::JsonPreview,
+                                super::form::CodexPreviewSection::Config,
+                            ) => {
+                                provider.focus = FormFocus::Templates;
+                            }
+                            (FormMode::Edit { .. }, FormFocus::Fields, _) => {
+                                provider.focus = FormFocus::JsonPreview;
+                                provider.codex_preview_section =
+                                    super::form::CodexPreviewSection::Auth;
+                            }
+                            (
+                                FormMode::Edit { .. },
+                                FormFocus::JsonPreview,
+                                super::form::CodexPreviewSection::Auth,
+                            ) => {
+                                provider.focus = FormFocus::JsonPreview;
+                                provider.codex_preview_section =
+                                    super::form::CodexPreviewSection::Config;
+                            }
+                            (
+                                FormMode::Edit { .. },
+                                FormFocus::JsonPreview,
+                                super::form::CodexPreviewSection::Config,
+                            ) => {
+                                provider.focus = FormFocus::Fields;
+                            }
+                            (FormMode::Edit { .. }, FormFocus::Templates, _) => {
+                                provider.focus = FormFocus::Fields;
+                            }
+                        }
+                    } else {
+                        provider.focus = match (&provider.mode, provider.focus) {
+                            (FormMode::Add, FormFocus::Templates) => FormFocus::Fields,
+                            (FormMode::Add, FormFocus::Fields) => FormFocus::JsonPreview,
+                            (FormMode::Add, FormFocus::JsonPreview) => FormFocus::Templates,
+                            (FormMode::Edit { .. }, FormFocus::Fields) => FormFocus::JsonPreview,
+                            (FormMode::Edit { .. }, FormFocus::JsonPreview) => FormFocus::Fields,
+                            (FormMode::Edit { .. }, FormFocus::Templates) => FormFocus::Fields,
+                        };
+                    }
                 }
                 FormState::McpAdd(mcp) => {
                     mcp.focus = match (&mcp.mode, mcp.focus) {
@@ -2306,6 +2420,17 @@ impl App {
                     provider.field_idx = provider.field_idx.min(fields.len() - 1);
                 } else {
                     provider.field_idx = 0;
+                }
+
+                if matches!(
+                    fields.get(provider.field_idx),
+                    Some(ProviderAddField::CommonConfigDivider)
+                ) {
+                    if provider.field_idx < fields.len().saturating_sub(1) {
+                        provider.field_idx = (provider.field_idx + 1).min(fields.len() - 1);
+                    } else {
+                        provider.field_idx = provider.field_idx.saturating_sub(1);
+                    }
                 }
 
                 let Some(selected) = fields.get(provider.field_idx).copied() else {
@@ -2443,10 +2568,26 @@ impl App {
                     match key.code {
                         KeyCode::Up => {
                             provider.field_idx = provider.field_idx.saturating_sub(1);
+                            while provider.field_idx > 0
+                                && matches!(
+                                    fields.get(provider.field_idx),
+                                    Some(ProviderAddField::CommonConfigDivider)
+                                )
+                            {
+                                provider.field_idx = provider.field_idx.saturating_sub(1);
+                            }
                             return Action::None;
                         }
                         KeyCode::Down => {
                             provider.field_idx = (provider.field_idx + 1).min(fields.len() - 1);
+                            while provider.field_idx < fields.len().saturating_sub(1)
+                                && matches!(
+                                    fields.get(provider.field_idx),
+                                    Some(ProviderAddField::CommonConfigDivider)
+                                )
+                            {
+                                provider.field_idx = (provider.field_idx + 1).min(fields.len() - 1);
+                            }
                             return Action::None;
                         }
                         KeyCode::Char(' ') | KeyCode::Enter => match selected {
@@ -2484,6 +2625,13 @@ impl App {
                                 };
                                 return Action::None;
                             }
+                            ProviderAddField::CommonSnippet => {
+                                if matches!(key.code, KeyCode::Enter) {
+                                    let app_type = provider.app_type.clone();
+                                    self.open_common_snippet_editor(app_type, data, None);
+                                }
+                                return Action::None;
+                            }
                             _ => {
                                 if selected == ProviderAddField::Id && !provider.is_id_editable() {
                                     return Action::None;
@@ -2498,52 +2646,165 @@ impl App {
                     }
                 }
             } else if provider.focus == FormFocus::JsonPreview {
-                match key.code {
-                    KeyCode::Enter => {
-                        let provider_json = match provider
-                            .to_provider_json_value_with_common_config(&data.config.common_snippet)
-                        {
-                            Ok(value) => value,
-                            Err(err) => {
-                                self.push_toast(err, ToastKind::Error);
+                if matches!(provider.app_type, AppType::Codex) {
+                    match key.code {
+                        KeyCode::Enter => match provider.codex_preview_section {
+                            super::form::CodexPreviewSection::Auth => {
+                                if provider.is_codex_official_provider() {
+                                    self.push_toast(
+                                        texts::tui_toast_codex_official_auth_json_disabled(),
+                                        ToastKind::Warning,
+                                    );
+                                    return Action::None;
+                                }
+
+                                let provider_json = provider.to_provider_json_value();
+                                let auth_value = provider_json
+                                    .get("settingsConfig")
+                                    .and_then(|v| v.get("auth"))
+                                    .cloned()
+                                    .unwrap_or_else(|| {
+                                        serde_json::Value::Object(serde_json::Map::new())
+                                    });
+                                let auth_value = if auth_value.is_object() {
+                                    auth_value
+                                } else {
+                                    serde_json::Value::Object(serde_json::Map::new())
+                                };
+                                let content = serde_json::to_string_pretty(&auth_value)
+                                    .unwrap_or_else(|_| "{}".to_string());
+                                self.open_editor(
+                                    texts::tui_codex_auth_json_title(),
+                                    EditorKind::Json,
+                                    content,
+                                    EditorSubmit::ProviderFormApplyCodexAuth,
+                                );
+                                if let Some(editor) = self.editor.as_mut() {
+                                    editor.mode = EditorMode::Edit;
+                                }
                                 return Action::None;
                             }
-                        };
-
-                        let settings_value = provider_json
-                            .get("settingsConfig")
-                            .cloned()
-                            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
-                        let content = serde_json::to_string_pretty(&settings_value)
-                            .unwrap_or_else(|_| "{}".to_string());
-                        self.open_editor(
-                            texts::tui_form_json_title(),
-                            EditorKind::Json,
-                            content,
-                            EditorSubmit::ProviderFormApplyJson,
-                        );
-                        if let Some(editor) = self.editor.as_mut() {
-                            editor.mode = EditorMode::Edit;
+                            super::form::CodexPreviewSection::Config => {
+                                let provider_json = provider.to_provider_json_value();
+                                let config_text = provider_json
+                                    .get("settingsConfig")
+                                    .and_then(|v| v.get("config"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                self.open_editor(
+                                    texts::tui_codex_config_toml_title(),
+                                    EditorKind::Plain,
+                                    config_text,
+                                    EditorSubmit::ProviderFormApplyCodexConfigToml,
+                                );
+                                if let Some(editor) = self.editor.as_mut() {
+                                    editor.mode = EditorMode::Edit;
+                                }
+                                return Action::None;
+                            }
+                        },
+                        KeyCode::Up => {
+                            let scroll = match provider.codex_preview_section {
+                                super::form::CodexPreviewSection::Auth => {
+                                    &mut provider.codex_auth_scroll
+                                }
+                                super::form::CodexPreviewSection::Config => {
+                                    &mut provider.codex_config_scroll
+                                }
+                            };
+                            *scroll = (*scroll).saturating_sub(1);
+                            return Action::None;
                         }
-                        return Action::None;
+                        KeyCode::Down => {
+                            let scroll = match provider.codex_preview_section {
+                                super::form::CodexPreviewSection::Auth => {
+                                    &mut provider.codex_auth_scroll
+                                }
+                                super::form::CodexPreviewSection::Config => {
+                                    &mut provider.codex_config_scroll
+                                }
+                            };
+                            *scroll = (*scroll).saturating_add(1);
+                            return Action::None;
+                        }
+                        KeyCode::PageUp => {
+                            let scroll = match provider.codex_preview_section {
+                                super::form::CodexPreviewSection::Auth => {
+                                    &mut provider.codex_auth_scroll
+                                }
+                                super::form::CodexPreviewSection::Config => {
+                                    &mut provider.codex_config_scroll
+                                }
+                            };
+                            *scroll = (*scroll).saturating_sub(10);
+                            return Action::None;
+                        }
+                        KeyCode::PageDown => {
+                            let scroll = match provider.codex_preview_section {
+                                super::form::CodexPreviewSection::Auth => {
+                                    &mut provider.codex_auth_scroll
+                                }
+                                super::form::CodexPreviewSection::Config => {
+                                    &mut provider.codex_config_scroll
+                                }
+                            };
+                            *scroll = (*scroll).saturating_add(10);
+                            return Action::None;
+                        }
+                        _ => {}
                     }
-                    KeyCode::Up => {
-                        provider.json_scroll = provider.json_scroll.saturating_sub(1);
-                        return Action::None;
+                } else {
+                    match key.code {
+                        KeyCode::Enter => {
+                            let provider_json = match provider
+                                .to_provider_json_value_with_common_config(
+                                    &data.config.common_snippet,
+                                ) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    self.push_toast(err, ToastKind::Error);
+                                    return Action::None;
+                                }
+                            };
+
+                            let settings_value = provider_json
+                                .get("settingsConfig")
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    serde_json::Value::Object(serde_json::Map::new())
+                                });
+                            let content = serde_json::to_string_pretty(&settings_value)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            self.open_editor(
+                                texts::tui_form_json_title(),
+                                EditorKind::Json,
+                                content,
+                                EditorSubmit::ProviderFormApplyJson,
+                            );
+                            if let Some(editor) = self.editor.as_mut() {
+                                editor.mode = EditorMode::Edit;
+                            }
+                            return Action::None;
+                        }
+                        KeyCode::Up => {
+                            provider.json_scroll = provider.json_scroll.saturating_sub(1);
+                            return Action::None;
+                        }
+                        KeyCode::Down => {
+                            provider.json_scroll = provider.json_scroll.saturating_add(1);
+                            return Action::None;
+                        }
+                        KeyCode::PageUp => {
+                            provider.json_scroll = provider.json_scroll.saturating_sub(10);
+                            return Action::None;
+                        }
+                        KeyCode::PageDown => {
+                            provider.json_scroll = provider.json_scroll.saturating_add(10);
+                            return Action::None;
+                        }
+                        _ => {}
                     }
-                    KeyCode::Down => {
-                        provider.json_scroll = provider.json_scroll.saturating_add(1);
-                        return Action::None;
-                    }
-                    KeyCode::PageUp => {
-                        provider.json_scroll = provider.json_scroll.saturating_sub(10);
-                        return Action::None;
-                    }
-                    KeyCode::PageDown => {
-                        provider.json_scroll = provider.json_scroll.saturating_add(10);
-                        return Action::None;
-                    }
-                    _ => {}
                 }
             }
         }
@@ -2685,13 +2946,17 @@ impl App {
                         return Action::None;
                     }
 
-                    let provider_json = match provider
-                        .to_provider_json_value_with_common_config(&data.config.common_snippet)
-                    {
-                        Ok(value) => value,
-                        Err(err) => {
-                            self.push_toast(err, ToastKind::Error);
-                            return Action::None;
+                    let provider_json = if matches!(provider.app_type, AppType::Codex) {
+                        provider.to_provider_json_value()
+                    } else {
+                        match provider
+                            .to_provider_json_value_with_common_config(&data.config.common_snippet)
+                        {
+                            Ok(value) => value,
+                            Err(err) => {
+                                self.push_toast(err, ToastKind::Error);
+                                return Action::None;
+                            }
                         }
                     };
                     let content = serde_json::to_string_pretty(&provider_json)
@@ -3187,6 +3452,14 @@ fn app_type_for_picker_index(index: usize) -> AppType {
     }
 }
 
+fn snippet_picker_index_for_app_type(app_type: &AppType) -> usize {
+    app_type_picker_index(app_type)
+}
+
+fn snippet_picker_app_type(index: usize) -> AppType {
+    app_type_for_picker_index(index)
+}
+
 fn sync_method_picker_index(method: SyncMethod) -> usize {
     match method {
         SyncMethod::Auto => 0,
@@ -3283,7 +3556,7 @@ mod tests {
     }
 
     #[test]
-    fn config_e_key_opens_common_snippet_editor_when_selected() {
+    fn config_e_key_opens_common_snippet_picker_when_selected() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Config;
         app.focus = Focus::Content;
@@ -3294,10 +3567,7 @@ mod tests {
 
         let action = app.on_key(key(KeyCode::Char('e')), &data());
         assert!(matches!(action, Action::None));
-        assert!(matches!(
-            app.editor.as_ref().map(|e| &e.submit),
-            Some(EditorSubmit::ConfigCommonSnippet)
-        ));
+        assert!(matches!(app.overlay, Overlay::CommonSnippetPicker { .. }));
     }
 
     #[test]
@@ -3700,7 +3970,7 @@ mod tests {
     }
 
     #[test]
-    fn config_common_snippet_overlay_supports_edit_clear_apply_actions() {
+    fn config_common_snippet_picker_and_view_support_edit_clear_apply_actions() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Config;
         app.focus = Focus::Content;
@@ -3711,15 +3981,29 @@ mod tests {
 
         let data = UiData::default();
         app.on_key(key(KeyCode::Enter), &data);
-        assert!(matches!(app.overlay, Overlay::CommonSnippetView(_)));
+        assert!(matches!(app.overlay, Overlay::CommonSnippetPicker { .. }));
+
+        // Picker default should be the current app type (Claude). Enter opens the preview overlay.
+        app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            app.overlay,
+            Overlay::CommonSnippetView {
+                app_type: AppType::Claude,
+                ..
+            }
+        ));
 
         assert!(matches!(
             app.on_key(key(KeyCode::Char('a')), &data),
-            Action::ConfigCommonSnippetApply
+            Action::ConfigCommonSnippetApply {
+                app_type: AppType::Claude
+            }
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('c')), &data),
-            Action::ConfigCommonSnippetClear
+            Action::ConfigCommonSnippetClear {
+                app_type: AppType::Claude
+            }
         ));
 
         let action = app.on_key(key(KeyCode::Char('e')), &data);
@@ -3728,6 +4012,281 @@ mod tests {
             app.editor.as_ref().map(|e| e.kind),
             Some(EditorKind::Json)
         ));
+    }
+
+    #[test]
+    fn config_common_snippet_picker_shows_snippet_for_non_current_app() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Config;
+        app.focus = Focus::Content;
+        app.config_idx = ConfigItem::ALL
+            .iter()
+            .position(|item| matches!(item, ConfigItem::CommonSnippet))
+            .expect("CommonSnippet missing from ConfigItem::ALL");
+
+        let mut data = UiData::default();
+        data.config.common_snippets.codex = Some("disable_response_storage = true".to_string());
+
+        app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(app.overlay, Overlay::CommonSnippetPicker { .. }));
+
+        app.on_key(key(KeyCode::Down), &data); // Claude -> Codex
+        app.on_key(key(KeyCode::Enter), &data);
+
+        let snippet = match &app.overlay {
+            Overlay::CommonSnippetView {
+                app_type: AppType::Codex,
+                view,
+            } => view.lines.join("\n"),
+            other => panic!("expected Codex snippet view, got {other:?}"),
+        };
+        assert!(
+            snippet.contains("disable_response_storage"),
+            "expected Codex snippet content to be loaded from snapshot"
+        );
+    }
+
+    #[test]
+    fn provider_add_form_codex_tab_cycles_fields_auth_config_templates() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+
+        app.on_key(key(KeyCode::Tab), &data); // fields -> auth preview
+        let (focus, section) = match app.form.as_ref() {
+            Some(FormState::ProviderAdd(form)) => (form.focus, form.codex_preview_section),
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(focus, super::super::form::FormFocus::JsonPreview);
+        assert_eq!(section, super::super::form::CodexPreviewSection::Auth);
+
+        app.on_key(key(KeyCode::Tab), &data); // auth preview -> config preview
+        let (focus, section) = match app.form.as_ref() {
+            Some(FormState::ProviderAdd(form)) => (form.focus, form.codex_preview_section),
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(focus, super::super::form::FormFocus::JsonPreview);
+        assert_eq!(section, super::super::form::CodexPreviewSection::Config);
+
+        app.on_key(key(KeyCode::Tab), &data); // config preview -> templates
+        let focus = match app.form.as_ref() {
+            Some(FormState::ProviderAdd(form)) => form.focus,
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(focus, super::super::form::FormFocus::Templates);
+    }
+
+    #[test]
+    fn provider_add_form_codex_preview_left_right_do_not_switch_panes() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+        app.on_key(key(KeyCode::Tab), &data); // fields -> auth preview
+
+        app.on_key(key(KeyCode::Right), &data);
+        let section = match app.form.as_ref() {
+            Some(FormState::ProviderAdd(form)) => form.codex_preview_section,
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(section, super::super::form::CodexPreviewSection::Auth);
+
+        app.on_key(key(KeyCode::Left), &data);
+        let section = match app.form.as_ref() {
+            Some(FormState::ProviderAdd(form)) => form.codex_preview_section,
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(section, super::super::form::CodexPreviewSection::Auth);
+    }
+
+    #[test]
+    fn provider_add_form_common_snippet_row_opens_editor_claude() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = super::super::form::FormFocus::Fields;
+            form.editing = false;
+            let fields = form.fields();
+            form.field_idx = fields
+                .iter()
+                .position(|f| *f == ProviderAddField::CommonSnippet)
+                .expect("CommonSnippet field should exist");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            app.editor.as_ref().map(|e| (&e.kind, &e.submit)),
+            Some((
+                EditorKind::Json,
+                EditorSubmit::ConfigCommonSnippet {
+                    app_type: AppType::Claude
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn provider_add_form_common_snippet_row_opens_editor_codex() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = super::super::form::FormFocus::Fields;
+            form.editing = false;
+            let fields = form.fields();
+            form.field_idx = fields
+                .iter()
+                .position(|f| *f == ProviderAddField::CommonSnippet)
+                .expect("CommonSnippet field should exist");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            app.editor.as_ref().map(|e| (&e.kind, &e.submit)),
+            Some((
+                EditorKind::Plain,
+                EditorSubmit::ConfigCommonSnippet {
+                    app_type: AppType::Codex
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn provider_add_form_common_snippet_row_opens_editor_gemini() {
+        let mut app = App::new(Some(AppType::Gemini));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = super::super::form::FormFocus::Fields;
+            form.editing = false;
+            let fields = form.fields();
+            form.field_idx = fields
+                .iter()
+                .position(|f| *f == ProviderAddField::CommonSnippet)
+                .expect("CommonSnippet field should exist");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            app.editor.as_ref().map(|e| (&e.kind, &e.submit)),
+            Some((
+                EditorKind::Json,
+                EditorSubmit::ConfigCommonSnippet {
+                    app_type: AppType::Gemini
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn provider_add_form_codex_preview_enter_opens_auth_editor() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+        app.on_key(key(KeyCode::Tab), &data); // fields -> preview
+
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.editor.as_ref().map(|e| (&e.kind, &e.submit)),
+            Some((EditorKind::Json, EditorSubmit::ProviderFormApplyCodexAuth))
+        ));
+    }
+
+    #[test]
+    fn provider_add_form_codex_preview_tab_then_enter_opens_config_editor() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+        app.on_key(key(KeyCode::Tab), &data); // fields -> preview
+        app.on_key(key(KeyCode::Tab), &data); // auth -> config
+
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.editor.as_ref().map(|e| (&e.kind, &e.submit)),
+            Some((
+                EditorKind::Plain,
+                EditorSubmit::ProviderFormApplyCodexConfigToml
+            ))
+        ));
+    }
+
+    #[test]
+    fn provider_add_form_codex_preview_c_does_not_open_common_snippet_view() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.config.common_snippet = "disable_response_storage = true".to_string();
+
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+        app.on_key(key(KeyCode::Tab), &data); // fields -> preview
+
+        let action = app.on_key(key(KeyCode::Char('c')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn provider_add_form_codex_official_auth_enter_does_not_open_editor() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Right), &data); // select OpenAI Official
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+        app.on_key(key(KeyCode::Tab), &data); // fields -> preview
+
+        app.on_key(key(KeyCode::Enter), &data); // try to edit auth
+        assert!(app.editor.is_none());
+        assert!(
+            app.toast.is_some(),
+            "should show a toast explaining auth is disabled"
+        );
     }
 
     #[test]
@@ -4480,6 +5039,38 @@ mod tests {
         assert!(
             content.contains("\"statusLine\""),
             "submitted provider JSON should include nested common snippet keys when enabled"
+        );
+    }
+
+    #[test]
+    fn provider_form_ctrl_s_does_not_merge_common_snippet_for_codex() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.config.common_snippet = "network_access = true".to_string();
+
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.id.set("p1");
+            form.name.set("Provider One");
+            form.include_common_config = true;
+            form.codex_base_url.set("https://api.example.com/v1");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        let submit = app.on_key(ctrl(KeyCode::Char('s')), &data);
+        assert!(matches!(submit, Action::EditorSubmit { .. }));
+        let Action::EditorSubmit { content, .. } = submit else {
+            unreachable!("expected submit action");
+        };
+        assert!(
+            !content.contains("network_access"),
+            "submitted Codex provider JSON should not include merged common snippet TOML"
         );
     }
 
