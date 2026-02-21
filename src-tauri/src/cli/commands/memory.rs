@@ -450,8 +450,22 @@ fn list_sessions(limit: i64) -> Result<(), AppError> {
 
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        return s.to_string();
     }
+
+    let ellipsis = "...";
+    if max_len <= ellipsis.len() {
+        return ellipsis.chars().take(max_len).collect();
+    }
+
+    let char_limit = max_len.saturating_sub(ellipsis.len());
+    let mut end = 0;
+    for (idx, _) in s.char_indices() {
+        if idx > char_limit {
+            break;
+        }
+        end = idx;
+    }
+
+    format!("{}{}", &s[..end], ellipsis)
 }

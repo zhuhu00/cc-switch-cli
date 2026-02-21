@@ -1,12 +1,13 @@
 //! Memory service for session context capture and semantic search.
 //!
-//! Uses SQLite + FTS5 for full-text search. Database stored at `~/.cc-switch/memory.db`.
+//! Uses SQLite + FTS5 for full-text search. Database is stored in the app config directory
+//! (e.g. `~/.cc-switch/memory.db`) as determined by `get_app_config_dir()`.
 
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, Once, OnceLock};
 
 use crate::app_config::AppType;
 use crate::config::get_app_config_dir;
@@ -90,6 +91,7 @@ pub struct Observation {
     pub observation_type: ObservationType,
     pub tags: Vec<String>,
     pub tokens: i32,
+    /// Reserved for future relevance ranking. Currently always 1.0.
     pub relevance_score: f64,
     pub created_at: DateTime<Utc>,
     pub project_dir: Option<String>,
@@ -134,25 +136,32 @@ fn get_db_path() -> PathBuf {
 }
 
 static DB_CONNECTION: OnceLock<Mutex<Connection>> = OnceLock::new();
+static DB_INIT: Once = Once::new();
+static DB_INIT_ERROR: OnceLock<String> = OnceLock::new();
 
 fn get_connection() -> Result<&'static Mutex<Connection>, AppError> {
-    if let Some(conn) = DB_CONNECTION.get() {
-        return Ok(conn);
-    }
+    DB_INIT.call_once(|| {
+        let result = (|| -> Result<Connection, AppError> {
+            let path = get_db_path();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+            }
+            let conn = Connection::open(&path)
+                .map_err(|e| AppError::Message(format!("Failed to open memory database: {e}")))?;
+            init_schema(&conn)?;
+            Ok(conn)
+        })();
 
-    let path = get_db_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
+        match result {
+            Ok(conn) => { let _ = DB_CONNECTION.set(Mutex::new(conn)); }
+            Err(e) => { let _ = DB_INIT_ERROR.set(e.to_string()); }
+        }
+    });
 
-    let conn = Connection::open(&path)
-        .map_err(|e| AppError::Message(format!("Failed to open memory database: {e}")))?;
-
-    init_schema(&conn)?;
-
-    // If another thread raced us, that's fine — just use theirs.
-    let _ = DB_CONNECTION.set(Mutex::new(conn));
-    Ok(DB_CONNECTION.get().unwrap())
+    DB_CONNECTION.get().ok_or_else(|| {
+        let msg = DB_INIT_ERROR.get().map(|s| s.as_str()).unwrap_or("Unknown error");
+        AppError::Message(format!("Memory database initialization failed: {msg}"))
+    })
 }
 
 fn init_schema(conn: &Connection) -> Result<(), AppError> {
@@ -227,7 +236,17 @@ fn init_schema(conn: &Connection) -> Result<(), AppError> {
 // Token Estimation
 // ============================================================================
 
-/// Estimate token count for text (rough approximation: ~4 chars per token)
+/// Safely convert a Unix timestamp to DateTime<Utc>, returning an error for invalid values.
+fn timestamp_to_datetime(ts: i64) -> Result<DateTime<Utc>, rusqlite::Error> {
+    Utc.timestamp_opt(ts, 0)
+        .single()
+        .ok_or_else(|| rusqlite::Error::IntegralValueOutOfRange(0, ts))
+}
+
+/// Estimate token count for text.
+///
+/// Uses a rough heuristic of ~4 bytes per token. This is an approximation and may
+/// be inaccurate for CJK text or code. Callers should not rely on exact counts.
 fn estimate_tokens(text: &str) -> i32 {
     (text.len() as f64 / 4.0).ceil() as i32
 }
@@ -311,7 +330,7 @@ impl MemoryService {
                         .collect(),
                     tokens: row.get(6)?,
                     relevance_score: row.get(7)?,
-                    created_at: Utc.timestamp_opt(row.get(8)?, 0).unwrap(),
+                    created_at: timestamp_to_datetime(row.get(8)?)?,
                     project_dir: row.get(9)?,
                 })
             },
@@ -374,7 +393,7 @@ impl MemoryService {
                         .collect(),
                     tokens: row.get(6)?,
                     relevance_score: row.get(7)?,
-                    created_at: Utc.timestamp_opt(row.get(8)?, 0).unwrap(),
+                    created_at: timestamp_to_datetime(row.get(8)?)?,
                     project_dir: row.get(9)?,
                 })
             })
@@ -408,9 +427,20 @@ impl MemoryService {
         let conn = get_connection()?.lock()?;
         let limit = limit.unwrap_or(20);
 
-        // Escape query for FTS5
-        let escaped_query = query.replace('"', "\"\"");
-        let fts_query = format!("\"{}\"", escaped_query);
+        // Sanitize query for FTS5: strip special characters and wrap each token in quotes
+        let fts_query: String = query
+            .split_whitespace()
+            .map(|token| {
+                let clean: String = token.chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-').collect();
+                format!("\"{}\"", clean)
+            })
+            .filter(|t| t != "\"\"")
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        if fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let mut stmt = conn
             .prepare(
@@ -442,7 +472,7 @@ impl MemoryService {
                         .collect(),
                     tokens: row.get(6)?,
                     relevance_score: row.get(7)?,
-                    created_at: Utc.timestamp_opt(row.get(8)?, 0).unwrap(),
+                    created_at: timestamp_to_datetime(row.get(8)?)?,
                     project_dir: row.get(9)?,
                 })
             })
@@ -605,10 +635,11 @@ impl MemoryService {
                     id: row.get(0)?,
                     app: row.get(1)?,
                     project_dir: row.get(2)?,
-                    started_at: Utc.timestamp_opt(row.get(3)?, 0).unwrap(),
+                    started_at: timestamp_to_datetime(row.get(3)?)?,
                     ended_at: row
                         .get::<_, Option<i64>>(4)?
-                        .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+                        .map(|ts| timestamp_to_datetime(ts))
+                        .transpose()?,
                     summary: row.get(5)?,
                 })
             })
@@ -664,7 +695,7 @@ impl MemoryService {
             )
             .ok()
             .flatten()
-            .map(|ts| Utc.timestamp_opt(ts, 0).unwrap());
+            .and_then(|ts| timestamp_to_datetime(ts).ok());
 
         let newest: Option<DateTime<Utc>> = conn
             .query_row(
@@ -674,7 +705,7 @@ impl MemoryService {
             )
             .ok()
             .flatten()
-            .map(|ts| Utc.timestamp_opt(ts, 0).unwrap());
+            .and_then(|ts| timestamp_to_datetime(ts).ok());
 
         Ok(MemoryStats {
             total_observations,
@@ -867,9 +898,27 @@ impl MemoryService {
         let (observation_type, title) = match tool_name {
             "Write" | "Edit" => (Some(ObservationType::Pattern), format!("{} operation", tool_name)),
             "Bash" => {
-                // Check if it's an error
-                if let Some(output) = tool_output.and_then(|v| v.as_str()) {
-                    if output.contains("error") || output.contains("Error") || output.contains("FAILED") {
+                // Check exit code first if available, then fall back to output heuristics
+                let has_error_exit = event
+                    .get("exit_code")
+                    .and_then(|v| v.as_i64())
+                    .map(|code| code != 0)
+                    .unwrap_or(false);
+
+                if has_error_exit {
+                    (Some(ObservationType::Error), "Bash error".to_string())
+                } else if let Some(output) = tool_output.and_then(|v| v.as_str()) {
+                    // Use line-start patterns to reduce false positives
+                    let has_error = output.lines().any(|line| {
+                        let trimmed = line.trim();
+                        trimmed.starts_with("error:")
+                            || trimmed.starts_with("Error:")
+                            || trimmed.starts_with("ERROR:")
+                            || trimmed.starts_with("FAILED")
+                            || trimmed.starts_with("fatal:")
+                            || trimmed.starts_with("panic:")
+                    });
+                    if has_error {
                         (Some(ObservationType::Error), "Bash error".to_string())
                     } else {
                         (None, String::new())
@@ -994,7 +1043,7 @@ fn has_cc_switch_hook(value: &serde_json::Value) -> bool {
             if let Some(hooks) = item.get("hooks").and_then(|h| h.as_array()) {
                 for hook in hooks {
                     if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
-                        if cmd.contains("cc-switch memory") {
+                        if cmd.contains("cc-switch memory hooks ingest") {
                             return true;
                         }
                     }
@@ -1007,17 +1056,23 @@ fn has_cc_switch_hook(value: &serde_json::Value) -> bool {
 
 fn remove_cc_switch_hook(value: &mut serde_json::Value) {
     if let Some(arr) = value.as_array_mut() {
-        arr.retain(|item| {
-            if let Some(hooks) = item.get("hooks").and_then(|h| h.as_array()) {
-                for hook in hooks {
-                    if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
-                        if cmd.contains("cc-switch memory") {
-                            return false;
-                        }
-                    }
-                }
+        // Remove cc-switch hooks from each item, then drop items with empty hooks
+        for item in arr.iter_mut() {
+            if let Some(hooks) = item.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+                hooks.retain(|hook| {
+                    hook.get("command")
+                        .and_then(|c| c.as_str())
+                        .map(|cmd| !cmd.contains("cc-switch memory hooks ingest"))
+                        .unwrap_or(true)
+                });
             }
-            true
+        }
+        // Remove items whose hooks array is now empty
+        arr.retain(|item| {
+            item.get("hooks")
+                .and_then(|h| h.as_array())
+                .map(|hooks| !hooks.is_empty())
+                .unwrap_or(true)
         });
     }
 }
