@@ -998,6 +998,153 @@ impl MemoryService {
         Ok(None)
     }
 
+    // -------------------------------------------------------------------------
+    // SQL Export / Import (for WebDAV sync)
+    // -------------------------------------------------------------------------
+
+    /// Export memory database as SQL bytes. Returns `None` if the database is empty.
+    pub fn export_sql_bytes() -> Result<Option<Vec<u8>>, AppError> {
+        let conn = get_connection()?.lock()?;
+
+        let total: i64 = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM sessions) + (SELECT COUNT(*) FROM observations)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        if total == 0 {
+            return Ok(None);
+        }
+
+        let mut output = String::new();
+        output.push_str("-- CC Switch Memory 导出\n");
+        output.push_str("PRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\n");
+
+        // Schema for sessions and observations (regular tables only)
+        let mut stmt = conn
+            .prepare(
+                "SELECT type, name, sql FROM sqlite_master \
+                 WHERE sql NOT NULL AND name IN ('sessions','observations') \
+                 ORDER BY type='table' DESC, name",
+            )
+            .map_err(|e| AppError::Message(format!("Memory export schema query failed: {e}")))?;
+
+        let mut tables = Vec::new();
+        let mut rows = stmt.query([]).map_err(|e| AppError::Message(e.to_string()))?;
+        while let Some(row) = rows.next().map_err(|e| AppError::Message(e.to_string()))? {
+            let obj_type: String = row.get(0).map_err(|e| AppError::Message(e.to_string()))?;
+            let name: String = row.get(1).map_err(|e| AppError::Message(e.to_string()))?;
+            let sql: String = row.get(2).map_err(|e| AppError::Message(e.to_string()))?;
+            output.push_str(&sql);
+            output.push_str(";\n");
+            if obj_type == "table" {
+                tables.push(name);
+            }
+        }
+
+        // Export indexes for these tables
+        let mut idx_stmt = conn
+            .prepare(
+                "SELECT sql FROM sqlite_master \
+                 WHERE type='index' AND sql NOT NULL AND tbl_name IN ('sessions','observations')",
+            )
+            .map_err(|e| AppError::Message(e.to_string()))?;
+        let mut idx_rows = idx_stmt.query([]).map_err(|e| AppError::Message(e.to_string()))?;
+        while let Some(row) = idx_rows.next().map_err(|e| AppError::Message(e.to_string()))? {
+            let sql: String = row.get(0).map_err(|e| AppError::Message(e.to_string()))?;
+            output.push_str(&sql);
+            output.push_str(";\n");
+        }
+
+        // Export triggers
+        let mut trig_stmt = conn
+            .prepare(
+                "SELECT sql FROM sqlite_master \
+                 WHERE type='trigger' AND sql NOT NULL AND tbl_name='observations'",
+            )
+            .map_err(|e| AppError::Message(e.to_string()))?;
+        let mut trig_rows = trig_stmt.query([]).map_err(|e| AppError::Message(e.to_string()))?;
+        while let Some(row) = trig_rows.next().map_err(|e| AppError::Message(e.to_string()))? {
+            let sql: String = row.get(0).map_err(|e| AppError::Message(e.to_string()))?;
+            output.push_str(&sql);
+            output.push_str(";\n");
+        }
+
+        // FTS5 virtual table
+        output.push_str(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(\
+             title,content,tags,content='observations',content_rowid='id');\n",
+        );
+
+        // Data
+        for table in &tables {
+            let col_names = memory_table_columns(&conn, table)?;
+            if col_names.is_empty() {
+                continue;
+            }
+            let mut data_stmt = conn
+                .prepare(&format!("SELECT * FROM \"{table}\""))
+                .map_err(|e| AppError::Message(e.to_string()))?;
+            let mut data_rows = data_stmt.query([]).map_err(|e| AppError::Message(e.to_string()))?;
+            while let Some(row) = data_rows.next().map_err(|e| AppError::Message(e.to_string()))? {
+                let mut values = Vec::with_capacity(col_names.len());
+                for idx in 0..col_names.len() {
+                    let val = row
+                        .get_ref(idx)
+                        .map_err(|e| AppError::Message(e.to_string()))?;
+                    values.push(format_memory_sql_value(val));
+                }
+                let cols = col_names
+                    .iter()
+                    .map(|c| format!("\"{c}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                output.push_str(&format!(
+                    "INSERT INTO \"{table}\" ({cols}) VALUES ({});\n",
+                    values.join(", ")
+                ));
+            }
+        }
+
+        // Rebuild FTS5 index
+        output.push_str(
+            "INSERT INTO observations_fts(observations_fts) VALUES('rebuild');\n",
+        );
+        output.push_str("COMMIT;\nPRAGMA foreign_keys=ON;\n");
+
+        Ok(Some(output.into_bytes()))
+    }
+
+    /// Import memory database from SQL bytes (full replace).
+    pub fn import_sql_bytes(bytes: &[u8]) -> Result<(), AppError> {
+        let sql = std::str::from_utf8(bytes)
+            .map_err(|e| AppError::Message(format!("Memory SQL is not valid UTF-8: {e}")))?;
+
+        if !sql.trim_start().starts_with("-- CC Switch Memory") {
+            return Err(AppError::Message(
+                "Invalid memory SQL export format".to_string(),
+            ));
+        }
+
+        let conn = get_connection()?.lock()?;
+
+        // Drop existing data
+        conn.execute_batch(
+            "DELETE FROM observations;\n\
+             DELETE FROM sessions;\n\
+             INSERT INTO observations_fts(observations_fts) VALUES('rebuild');",
+        )
+        .map_err(|e| AppError::Message(format!("Failed to clear memory tables: {e}")))?;
+
+        // Execute import — the SQL already contains CREATE TABLE IF NOT EXISTS + INSERT
+        conn.execute_batch(sql)
+            .map_err(|e| AppError::Message(format!("Memory SQL import failed: {e}")))?;
+
+        Ok(())
+    }
+
     /// Format context for display
     pub fn format_context(items: &[ContextItem]) -> String {
         if items.is_empty() {
@@ -1074,5 +1221,46 @@ fn remove_cc_switch_hook(value: &mut serde_json::Value) {
                 .map(|hooks| !hooks.is_empty())
                 .unwrap_or(true)
         });
+    }
+}
+
+// ============================================================================
+// SQL Export Helpers
+// ============================================================================
+
+fn memory_table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info(\"{table}\")"))
+        .map_err(|e| AppError::Message(e.to_string()))?;
+    let iter = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AppError::Message(e.to_string()))?;
+    let mut cols = Vec::new();
+    for c in iter {
+        cols.push(c.map_err(|e| AppError::Message(e.to_string()))?);
+    }
+    Ok(cols)
+}
+
+fn format_memory_sql_value(value: rusqlite::types::ValueRef<'_>) -> String {
+    use rusqlite::types::ValueRef;
+    match value {
+        ValueRef::Null => "NULL".to_string(),
+        ValueRef::Integer(i) => i.to_string(),
+        ValueRef::Real(f) => f.to_string(),
+        ValueRef::Text(t) => {
+            let text = std::str::from_utf8(t).unwrap_or("");
+            let escaped = text.replace('\'', "''");
+            format!("'{escaped}'")
+        }
+        ValueRef::Blob(bytes) => {
+            let mut s = String::from("X'");
+            for b in bytes {
+                use std::fmt::Write;
+                let _ = write!(&mut s, "{b:02X}");
+            }
+            s.push('\'');
+            s
+        }
     }
 }
