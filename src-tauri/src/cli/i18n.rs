@@ -6550,7 +6550,25 @@ pub mod texts {
 
 #[cfg(test)]
 mod tests {
-    use super::texts;
+    use super::{language_store, texts, Language};
+
+    struct LanguageGuard(Language);
+
+    impl LanguageGuard {
+        fn set(lang: Language) -> Self {
+            let mut guard = language_store().write().expect("write language");
+            let prev = *guard;
+            *guard = lang;
+            Self(prev)
+        }
+    }
+
+    impl Drop for LanguageGuard {
+        fn drop(&mut self) {
+            let mut guard = language_store().write().expect("write language");
+            *guard = self.0;
+        }
+    }
 
     #[test]
     fn website_url_label_keeps_optional_with_abbrev() {
@@ -6558,5 +6576,30 @@ mod tests {
         assert_eq!(label, "Website URL (opt.):");
         assert!(label.contains("(opt.)"));
         assert!(!label.contains("(optional)"));
+    }
+
+    #[test]
+    fn chinese_tui_copy_avoids_key_mixed_english_labels() {
+        let _guard = LanguageGuard::set(Language::Chinese);
+
+        assert_eq!(texts::tui_home_section_connection(), "连接信息");
+        assert_eq!(texts::tui_home_status_online(), "在线");
+        assert_eq!(texts::tui_home_status_offline(), "离线");
+        assert_eq!(texts::tui_label_mcp_servers_active(), "已启用");
+        assert_eq!(texts::skills_management(), "技能管理");
+        assert_eq!(texts::menu_manage_mcp(), "🔌 MCP 服务器");
+
+        let help = texts::tui_help_text();
+        assert!(help.contains("供应商：Enter 详情"));
+        assert!(help.contains("供应商详情：s 切换"));
+        assert!(help.contains("提示词：Enter 查看"));
+        assert!(help.contains("技能：Enter 详情"));
+        assert!(help.contains("配置：Enter 打开/执行"));
+        assert!(help.contains("设置：Enter 应用"));
+        assert!(!help.contains("Providers:"));
+        assert!(!help.contains("Provider Detail:"));
+        assert!(!help.contains("Skills:"));
+        assert!(!help.contains("Config:"));
+        assert!(!help.contains("Settings:"));
     }
 }
