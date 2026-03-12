@@ -15,11 +15,31 @@ use tempfile::NamedTempFile;
 
 const CC_SWITCH_SQL_EXPORT_HEADER: &str = "-- CC Switch SQLite 导出";
 
+const SYNC_SKIP_TABLES: &[&str] = &[
+    "proxy_request_logs",
+    "stream_check_logs",
+    "provider_health",
+    "proxy_live_backup",
+    "usage_daily_rollups",
+];
+
+const SYNC_PRESERVE_TABLES: &[&str] = &[
+    "proxy_request_logs",
+    "stream_check_logs",
+    "proxy_live_backup",
+    "usage_daily_rollups",
+];
+
 impl Database {
     /// 导出为 SQL 字符串（内存操作，不写文件）
     pub fn export_sql_string(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
-        Self::dump_sql(&snapshot)
+        Self::dump_sql(&snapshot, &[])
+    }
+
+    pub fn export_sql_string_for_sync(&self) -> Result<String, AppError> {
+        let snapshot = self.snapshot_to_memory()?;
+        Self::dump_sql(&snapshot, SYNC_SKIP_TABLES)
     }
 
     /// 导出为 SQLite 兼容的 SQL 文本文件
@@ -35,11 +55,29 @@ impl Database {
 
     /// 从 SQL 字符串导入，返回生成的备份 ID（若无备份则为空字符串）
     pub fn import_sql_string(&self, sql_raw: &str) -> Result<String, AppError> {
+        self.import_sql_string_inner(sql_raw, &[])
+    }
+
+    pub(crate) fn import_sql_string_for_sync(&self, sql_raw: &str) -> Result<String, AppError> {
+        self.import_sql_string_inner(sql_raw, SYNC_PRESERVE_TABLES)
+    }
+
+    fn import_sql_string_inner(
+        &self,
+        sql_raw: &str,
+        preserve_tables: &[&str],
+    ) -> Result<String, AppError> {
         let sql_content = sql_raw.trim_start_matches('\u{feff}');
         Self::validate_cc_switch_sql_export(sql_content)?;
 
         // 导入前备份现有数据库
         let backup_path = self.backup_database_file()?;
+
+        let local_snapshot = if preserve_tables.is_empty() {
+            None
+        } else {
+            Some(self.snapshot_to_memory()?)
+        };
 
         // 在临时数据库执行导入，确保失败不会污染主库
         let temp_file = NamedTempFile::new().map_err(|e| AppError::IoContext {
@@ -58,6 +96,9 @@ impl Database {
         Self::create_tables_on_conn(&temp_conn)?;
         Self::apply_schema_migrations_on_conn(&temp_conn)?;
         Self::validate_basic_state(&temp_conn)?;
+        if let Some(local_snapshot) = local_snapshot.as_ref() {
+            Self::restore_tables(local_snapshot, &temp_conn, preserve_tables)?;
+        }
 
         // 使用 Backup 将临时库原子写回主库
         {
@@ -117,6 +158,62 @@ impl Database {
             "仅支持导入由 CC Switch 导出的 SQL 备份文件。",
             "Only SQL backups exported by CC Switch are supported.",
         ))
+    }
+
+    fn restore_tables(
+        source_conn: &Connection,
+        target_conn: &Connection,
+        tables: &[&str],
+    ) -> Result<(), AppError> {
+        for table in tables {
+            if !Self::table_exists(source_conn, table)? || !Self::table_exists(target_conn, table)?
+            {
+                continue;
+            }
+
+            let columns = Self::get_table_columns(source_conn, table)?;
+            if columns.is_empty() {
+                continue;
+            }
+
+            target_conn
+                .execute(&format!("DELETE FROM \"{table}\""), [])
+                .map_err(|e| AppError::Database(format!("清空表 {table} 失败: {e}")))?;
+
+            let placeholders = (1..=columns.len())
+                .map(|idx| format!("?{idx}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let cols = columns
+                .iter()
+                .map(|column| format!("\"{column}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let insert_sql = format!("INSERT INTO \"{table}\" ({cols}) VALUES ({placeholders})");
+
+            let mut stmt = source_conn
+                .prepare(&format!("SELECT * FROM \"{table}\""))
+                .map_err(|e| AppError::Database(format!("读取表 {table} 失败: {e}")))?;
+            let mut rows = stmt
+                .query([])
+                .map_err(|e| AppError::Database(format!("查询表 {table} 数据失败: {e}")))?;
+
+            while let Some(row) = rows.next().map_err(|e| AppError::Database(e.to_string()))? {
+                let mut values = Vec::with_capacity(columns.len());
+                for idx in 0..columns.len() {
+                    values.push(
+                        row.get::<_, rusqlite::types::Value>(idx)
+                            .map_err(|e| AppError::Database(e.to_string()))?,
+                    );
+                }
+
+                target_conn
+                    .execute(&insert_sql, rusqlite::params_from_iter(values.iter()))
+                    .map_err(|e| AppError::Database(format!("恢复表 {table} 数据失败: {e}")))?;
+            }
+        }
+
+        Ok(())
     }
 
     /// 生成一致性快照备份，返回备份文件路径（不存在主库时返回 None）
@@ -208,7 +305,7 @@ impl Database {
     }
 
     /// 导出数据库为 SQL 文本
-    fn dump_sql(conn: &Connection) -> Result<String, AppError> {
+    fn dump_sql(conn: &Connection, skip_data_tables: &[&str]) -> Result<String, AppError> {
         let mut output = String::new();
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let user_version: i64 = conn
@@ -256,6 +353,10 @@ impl Database {
 
         // 导出数据
         for table in tables {
+            if skip_data_tables.iter().any(|skip| *skip == table) {
+                continue;
+            }
+
             let columns = Self::get_table_columns(conn, &table)?;
             if columns.is_empty() {
                 continue;
@@ -331,5 +432,98 @@ impl Database {
                 Ok(s)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Database;
+    use crate::error::AppError;
+
+    #[test]
+    fn sync_import_preserves_local_only_tables() -> Result<(), AppError> {
+        let remote_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(remote_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('remote-provider', 'claude', 'Remote Provider', '{}', '{}')",
+                [],
+            )?;
+        }
+        let remote_sql = remote_db.export_sql_string_for_sync()?;
+
+        let local_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('local-provider', 'claude', 'Local Provider', '{}', '{}')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                    request_id, provider_id, app_type, model,
+                    input_tokens, output_tokens, total_cost_usd,
+                    latency_ms, status_code, created_at
+                ) VALUES ('req-1', 'local-provider', 'claude', 'claude-3', 100, 50, '0.01', 120, 200, 1000)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO usage_daily_rollups (
+                    date, app_type, provider_id, model, request_count, success_count,
+                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                    total_cost_usd, avg_latency_ms
+                ) VALUES ('2026-03-01', 'claude', 'local-provider', 'claude-3', 7, 7, 700, 350, 0, 0, '0.07', 120)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO stream_check_logs (
+                    provider_id, provider_name, app_type, status, success, message,
+                    response_time_ms, http_status, model_used, retry_count, tested_at
+                ) VALUES ('local-provider', 'Local Provider', 'claude', 'operational', 1, 'ok', 42, 200, 'claude-3', 0, 1000)",
+                [],
+            )?;
+        }
+
+        local_db.import_sql_string_for_sync(&remote_sql)?;
+
+        let remote_provider_exists: i64 = {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            conn.query_row(
+                "SELECT COUNT(*) FROM providers WHERE id = 'remote-provider' AND app_type = 'claude'",
+                [],
+                |row| row.get(0),
+            )?
+        };
+        assert_eq!(
+            remote_provider_exists, 1,
+            "remote config should be imported"
+        );
+
+        let (request_logs, rollups, stream_logs): (i64, i64, i64) = {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            let request_logs =
+                conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
+                    row.get(0)
+                })?;
+            let rollups =
+                conn.query_row("SELECT COUNT(*) FROM usage_daily_rollups", [], |row| {
+                    row.get(0)
+                })?;
+            let stream_logs =
+                conn.query_row("SELECT COUNT(*) FROM stream_check_logs", [], |row| {
+                    row.get(0)
+                })?;
+            (request_logs, rollups, stream_logs)
+        };
+        assert_eq!(request_logs, 1, "local request logs should be preserved");
+        assert_eq!(rollups, 1, "local rollups should be preserved");
+        assert_eq!(
+            stream_logs, 1,
+            "local stream check logs should be preserved"
+        );
+
+        Ok(())
     }
 }

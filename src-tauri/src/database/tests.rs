@@ -328,6 +328,126 @@ fn schema_migration_v4_adds_pricing_model_columns() {
 }
 
 #[test]
+fn schema_create_tables_include_usage_daily_rollups() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    Database::create_tables_on_conn(&conn).expect("create tables");
+
+    assert!(
+        Database::table_exists(&conn, "usage_daily_rollups").expect("check table"),
+        "usage_daily_rollups should exist after create_tables"
+    );
+
+    let avg_latency = get_column_info(&conn, "usage_daily_rollups", "avg_latency_ms");
+    assert_eq!(avg_latency.r#type, "INTEGER");
+    assert_eq!(avg_latency.notnull, 1);
+    assert_eq!(
+        normalize_default(&avg_latency.default).as_deref(),
+        Some("0")
+    );
+}
+
+#[test]
+fn schema_migration_v5_adds_usage_daily_rollups() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE providers (
+            id TEXT NOT NULL,
+            app_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            settings_config TEXT NOT NULL,
+            meta TEXT NOT NULL DEFAULT '{}',
+            is_current BOOLEAN NOT NULL DEFAULT 0,
+            in_failover_queue BOOLEAN NOT NULL DEFAULT 0,
+            PRIMARY KEY (id, app_type)
+        );
+        CREATE TABLE mcp_servers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            server_config TEXT NOT NULL,
+            enabled_claude INTEGER NOT NULL DEFAULT 0,
+            enabled_codex INTEGER NOT NULL DEFAULT 0,
+            enabled_gemini INTEGER NOT NULL DEFAULT 0,
+            enabled_opencode INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE prompts (
+            id TEXT NOT NULL,
+            app_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            content TEXT NOT NULL,
+            PRIMARY KEY (id, app_type)
+        );
+        CREATE TABLE skills (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            directory TEXT NOT NULL,
+            enabled_claude BOOLEAN NOT NULL DEFAULT 0,
+            enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+            enabled_gemini BOOLEAN NOT NULL DEFAULT 0,
+            enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
+            installed_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE skill_repos (
+            owner TEXT NOT NULL,
+            name TEXT NOT NULL,
+            branch TEXT NOT NULL DEFAULT 'main',
+            enabled BOOLEAN NOT NULL DEFAULT 1,
+            PRIMARY KEY (owner, name)
+        );
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE proxy_config (
+            app_type TEXT PRIMARY KEY,
+            default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+            pricing_model_source TEXT NOT NULL DEFAULT 'response'
+        );
+        CREATE TABLE proxy_request_logs (
+            request_id TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL,
+            app_type TEXT NOT NULL,
+            model TEXT NOT NULL,
+            request_model TEXT
+        );
+        CREATE TABLE stream_check_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_id TEXT NOT NULL,
+            provider_name TEXT NOT NULL,
+            app_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            tested_at INTEGER NOT NULL
+        );
+        CREATE TABLE model_pricing (
+            model_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            input_cost_per_million TEXT NOT NULL,
+            output_cost_per_million TEXT NOT NULL,
+            cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
+            cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0'
+        );
+        CREATE TABLE proxy_live_backup (
+            app_type TEXT PRIMARY KEY,
+            original_config TEXT NOT NULL,
+            backed_up_at TEXT NOT NULL
+        );
+        "#,
+    )
+    .expect("seed v5 schema");
+    Database::set_user_version(&conn, 5).expect("set user_version=5");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("apply migrations");
+
+    assert!(
+        Database::table_exists(&conn, "usage_daily_rollups").expect("check table"),
+        "usage_daily_rollups should exist after v5 migration"
+    );
+    assert_eq!(
+        Database::get_user_version(&conn).expect("version after migration"),
+        SCHEMA_VERSION
+    );
+}
+
+#[test]
 fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
     let conn = Connection::open_in_memory().expect("open memory db");
 

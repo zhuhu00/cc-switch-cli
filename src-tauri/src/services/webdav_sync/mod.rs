@@ -1,7 +1,8 @@
-//! WebDAV 同步协议 v2
+//! WebDAV v2 sync protocol layer with DB compatibility subdirectories.
 //!
-//! 与上游 GUI 兼容的同步协议：远端路径 `{root}/v2/{profile}/`，
-//! manifest 使用 BTreeMap 存储 artifacts，仅同步 db.sql + skills.zip。
+//! Manifest-based synchronization on top of the WebDAV transport helpers.
+//! Current layout uses `{root}/v2/db-v6/{profile}/`, with legacy fallback to
+//! `{root}/v2/{profile}/`. Artifact set: `db.sql` + `skills.zip`.
 
 mod archive;
 
@@ -49,6 +50,8 @@ fn io_context_localized(
 
 const PROTOCOL_FORMAT: &str = "cc-switch-webdav-sync";
 const PROTOCOL_VERSION: u32 = 2;
+const DB_COMPAT_VERSION: u32 = 6;
+const LEGACY_DB_COMPAT_VERSION: u32 = 5;
 const REMOTE_DB_SQL: &str = "db.sql";
 const REMOTE_SKILLS_ZIP: &str = "skills.zip";
 const REMOTE_MANIFEST: &str = "manifest.json";
@@ -84,6 +87,8 @@ pub struct WebDavSyncSummary {
 struct SyncManifest {
     format: String,
     version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    db_compat_version: Option<u32>,
     device_name: String,
     created_at: String,
     artifacts: BTreeMap<String, ArtifactMeta>,
@@ -105,6 +110,19 @@ struct LocalSnapshot {
     skills_zip: Vec<u8>,
     manifest_bytes: Vec<u8>,
     manifest_hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteLayout {
+    Current,
+    Legacy,
+}
+
+struct RemoteSnapshot {
+    layout: RemoteLayout,
+    manifest: SyncManifest,
+    manifest_bytes: Vec<u8>,
+    manifest_etag: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +158,7 @@ async fn check_connection() -> Result<(), AppError> {
     let settings = load_webdav_settings()?;
     let auth = webdav::auth_from_credentials(&settings.username, &settings.password);
     webdav::test_connection(&settings.base_url, &auth).await?;
-    let dir_segments = remote_dir_segments(&settings);
+    let dir_segments = remote_dir_segments(&settings, RemoteLayout::Current);
     webdav::ensure_remote_directories(&settings.base_url, &dir_segments, &auth).await?;
     Ok(())
 }
@@ -149,20 +167,20 @@ async fn upload() -> Result<WebDavSyncSummary, AppError> {
     let mut settings = load_webdav_settings()?;
     let auth = webdav::auth_from_credentials(&settings.username, &settings.password);
 
-    let dir_segments = remote_dir_segments(&settings);
+    let dir_segments = remote_dir_segments(&settings, RemoteLayout::Current);
     webdav::ensure_remote_directories(&settings.base_url, &dir_segments, &auth).await?;
 
     let snapshot = build_local_snapshot(&settings)?;
 
     // 上传 artifacts
-    let db_url = build_artifact_url(&settings, REMOTE_DB_SQL)?;
+    let db_url = build_artifact_url(&settings, RemoteLayout::Current, REMOTE_DB_SQL)?;
     webdav::put_bytes(&db_url, &auth, snapshot.db_sql, "application/sql").await?;
 
-    let skills_url = build_artifact_url(&settings, REMOTE_SKILLS_ZIP)?;
+    let skills_url = build_artifact_url(&settings, RemoteLayout::Current, REMOTE_SKILLS_ZIP)?;
     webdav::put_bytes(&skills_url, &auth, snapshot.skills_zip, "application/zip").await?;
 
     // 上传 manifest（最后上传，确保 artifacts 已就绪）
-    let manifest_url = build_artifact_url(&settings, REMOTE_MANIFEST)?;
+    let manifest_url = build_artifact_url(&settings, RemoteLayout::Current, REMOTE_MANIFEST)?;
     webdav::put_bytes(
         &manifest_url,
         &auth,
@@ -195,54 +213,46 @@ async fn download() -> Result<WebDavSyncSummary, AppError> {
     let mut settings = load_webdav_settings()?;
     let auth = webdav::auth_from_credentials(&settings.username, &settings.password);
 
-    // 下载 V2 manifest
-    let manifest_url = build_artifact_url(&settings, REMOTE_MANIFEST)?;
-    let v2_result = webdav::get_bytes(&manifest_url, &auth, Some(MAX_MANIFEST_BYTES)).await?;
+    if let Some(snapshot) = find_remote_snapshot(&settings, &auth).await? {
+        validate_manifest_compat(&snapshot.manifest, snapshot.layout)?;
 
-    match v2_result {
-        Some((manifest_bytes, etag)) => {
-            // V2 数据存在，正常下载流程
-            let manifest: SyncManifest =
-                serde_json::from_slice(&manifest_bytes).map_err(|e| AppError::Json {
-                    path: REMOTE_MANIFEST.to_string(),
-                    source: e,
-                })?;
-            validate_manifest_compat(&manifest)?;
+        let manifest_hash = sha256_hex(&snapshot.manifest_bytes);
+        let db_sql = download_and_verify(
+            &settings,
+            &auth,
+            snapshot.layout,
+            REMOTE_DB_SQL,
+            &snapshot.manifest.artifacts,
+        )
+        .await?;
+        let skills_zip = download_and_verify(
+            &settings,
+            &auth,
+            snapshot.layout,
+            REMOTE_SKILLS_ZIP,
+            &snapshot.manifest.artifacts,
+        )
+        .await?;
 
-            let manifest_hash = sha256_hex(&manifest_bytes);
+        apply_snapshot(&db_sql, &skills_zip)?;
+        persist_sync_success_best_effort(&mut settings, &manifest_hash, snapshot.manifest_etag);
+        cleanup_v1_remote(&settings, &auth).await;
 
-            let db_sql =
-                download_and_verify(&settings, &auth, REMOTE_DB_SQL, &manifest.artifacts).await?;
-            let skills_zip =
-                download_and_verify(&settings, &auth, REMOTE_SKILLS_ZIP, &manifest.artifacts)
-                    .await?;
-
-            apply_snapshot(&db_sql, &skills_zip)?;
-            persist_sync_success_best_effort(&mut settings, &manifest_hash, etag);
-
-            // V2 下载成功，顺手清理 V1 残留
-            cleanup_v1_remote(&settings, &auth).await;
-
-            Ok(WebDavSyncSummary {
-                decision: SyncDecision::Download,
-                message: "WebDAV download completed".to_string(),
-            })
-        }
-        None => {
-            // V2 为空，检测 V1
-            if detect_v1_manifest(&settings, &auth).await?.is_some() {
-                Ok(WebDavSyncSummary {
-                    decision: SyncDecision::V1MigrationNeeded,
-                    message: String::new(),
-                })
-            } else {
-                Err(localized(
-                    "webdav.sync.remote_empty",
-                    "远端没有可下载的同步数据",
-                    "No downloadable sync data found on the remote",
-                ))
-            }
-        }
+        Ok(WebDavSyncSummary {
+            decision: SyncDecision::Download,
+            message: "WebDAV download completed".to_string(),
+        })
+    } else if detect_v1_manifest(&settings, &auth).await?.is_some() {
+        Ok(WebDavSyncSummary {
+            decision: SyncDecision::V1MigrationNeeded,
+            message: String::new(),
+        })
+    } else {
+        Err(localized(
+            "webdav.sync.remote_empty",
+            "远端没有可下载的同步数据",
+            "No downloadable sync data found on the remote",
+        ))
     }
 }
 
@@ -273,16 +283,23 @@ fn load_webdav_settings() -> Result<WebDavSyncSettings, AppError> {
 // 远端路径
 // ---------------------------------------------------------------------------
 
-fn remote_dir_segments(settings: &WebDavSyncSettings) -> Vec<String> {
+fn remote_dir_segments(settings: &WebDavSyncSettings, layout: RemoteLayout) -> Vec<String> {
     let mut segments = Vec::new();
     segments.extend(webdav::path_segments(&settings.remote_root).map(str::to_string));
     segments.push(format!("v{PROTOCOL_VERSION}"));
+    if layout == RemoteLayout::Current {
+        segments.push(format!("db-v{DB_COMPAT_VERSION}"));
+    }
     segments.extend(webdav::path_segments(&settings.profile).map(str::to_string));
     segments
 }
 
-fn build_artifact_url(settings: &WebDavSyncSettings, file_name: &str) -> Result<String, AppError> {
-    let mut segments = remote_dir_segments(settings);
+fn build_artifact_url(
+    settings: &WebDavSyncSettings,
+    layout: RemoteLayout,
+    file_name: &str,
+) -> Result<String, AppError> {
+    let mut segments = remote_dir_segments(settings, layout);
     segments.extend(webdav::path_segments(file_name).map(str::to_string));
     webdav::build_remote_url(&settings.base_url, &segments)
 }
@@ -302,7 +319,7 @@ fn build_local_snapshot(_settings: &WebDavSyncSettings) -> Result<LocalSnapshot,
     })?;
 
     // 导出 DB
-    let db_sql = Database::init()?.export_sql_string()?.into_bytes();
+    let db_sql = Database::init()?.export_sql_string_for_sync()?.into_bytes();
 
     // 打包 skills
     let skills_zip_path = tmp.path().join(REMOTE_SKILLS_ZIP);
@@ -333,6 +350,7 @@ fn build_local_snapshot(_settings: &WebDavSyncSettings) -> Result<LocalSnapshot,
     let manifest = SyncManifest {
         format: PROTOCOL_FORMAT.to_string(),
         version: PROTOCOL_VERSION,
+        db_compat_version: Some(DB_COMPAT_VERSION),
         device_name,
         created_at: Utc::now().to_rfc3339(),
         artifacts,
@@ -355,7 +373,13 @@ fn build_local_snapshot(_settings: &WebDavSyncSettings) -> Result<LocalSnapshot,
 // Manifest 验证
 // ---------------------------------------------------------------------------
 
-fn validate_manifest_compat(manifest: &SyncManifest) -> Result<(), AppError> {
+fn effective_db_compat_version(manifest: &SyncManifest, layout: RemoteLayout) -> Option<u32> {
+    manifest
+        .db_compat_version
+        .or_else(|| (layout == RemoteLayout::Legacy).then_some(LEGACY_DB_COMPAT_VERSION))
+}
+
+fn validate_manifest_compat(manifest: &SyncManifest, layout: RemoteLayout) -> Result<(), AppError> {
     if manifest.format != PROTOCOL_FORMAT {
         return Err(localized(
             "webdav.sync.manifest_format_incompatible",
@@ -379,7 +403,81 @@ fn validate_manifest_compat(manifest: &SyncManifest) -> Result<(), AppError> {
             ),
         ));
     }
+    let Some(db_compat_version) = effective_db_compat_version(manifest, layout) else {
+        return Err(localized(
+            "webdav.sync.manifest_db_version_missing",
+            "远端 manifest 缺少数据库兼容版本",
+            "Remote manifest is missing the database compatibility version.",
+        ));
+    };
+
+    match layout {
+        RemoteLayout::Current if db_compat_version != DB_COMPAT_VERSION => {
+            return Err(localized(
+                "webdav.sync.manifest_db_version_incompatible",
+                format!(
+                    "远端数据库快照版本不兼容: db-v{} (本地 db-v{DB_COMPAT_VERSION})",
+                    db_compat_version
+                ),
+                format!(
+                    "Remote database snapshot version is incompatible: db-v{} (local db-v{DB_COMPAT_VERSION})",
+                    db_compat_version
+                ),
+            ));
+        }
+        RemoteLayout::Legacy if db_compat_version > DB_COMPAT_VERSION => {
+            return Err(localized(
+                "webdav.sync.manifest_db_version_incompatible",
+                format!(
+                    "远端数据库快照版本不兼容: db-v{} (本地最高支持 db-v{DB_COMPAT_VERSION})",
+                    db_compat_version
+                ),
+                format!(
+                    "Remote database snapshot version is incompatible: db-v{} (local supports up to db-v{DB_COMPAT_VERSION})",
+                    db_compat_version
+                ),
+            ));
+        }
+        _ => {}
+    }
     Ok(())
+}
+
+async fn find_remote_snapshot(
+    settings: &WebDavSyncSettings,
+    auth: &webdav::WebDavAuth,
+) -> Result<Option<RemoteSnapshot>, AppError> {
+    if let Some(snapshot) = fetch_remote_snapshot(settings, auth, RemoteLayout::Current).await? {
+        return Ok(Some(snapshot));
+    }
+
+    fetch_remote_snapshot(settings, auth, RemoteLayout::Legacy).await
+}
+
+async fn fetch_remote_snapshot(
+    settings: &WebDavSyncSettings,
+    auth: &webdav::WebDavAuth,
+    layout: RemoteLayout,
+) -> Result<Option<RemoteSnapshot>, AppError> {
+    let manifest_url = build_artifact_url(settings, layout, REMOTE_MANIFEST)?;
+    let Some((manifest_bytes, manifest_etag)) =
+        webdav::get_bytes(&manifest_url, auth, Some(MAX_MANIFEST_BYTES)).await?
+    else {
+        return Ok(None);
+    };
+
+    let manifest: SyncManifest =
+        serde_json::from_slice(&manifest_bytes).map_err(|e| AppError::Json {
+            path: REMOTE_MANIFEST.to_string(),
+            source: e,
+        })?;
+
+    Ok(Some(RemoteSnapshot {
+        layout,
+        manifest,
+        manifest_bytes,
+        manifest_etag,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +487,7 @@ fn validate_manifest_compat(manifest: &SyncManifest) -> Result<(), AppError> {
 async fn download_and_verify(
     settings: &WebDavSyncSettings,
     auth: &webdav::WebDavAuth,
+    layout: RemoteLayout,
     artifact_name: &str,
     artifacts: &BTreeMap<String, ArtifactMeta>,
 ) -> Result<Vec<u8>, AppError> {
@@ -402,7 +501,7 @@ async fn download_and_verify(
 
     validate_artifact_size_limit(artifact_name, meta.size)?;
 
-    let url = build_artifact_url(settings, artifact_name)?;
+    let url = build_artifact_url(settings, layout, artifact_name)?;
     let (bytes, _) = webdav::get_bytes(&url, auth, Some(MAX_SYNC_ARTIFACT_BYTES))
         .await?
         .ok_or_else(|| {
@@ -480,7 +579,7 @@ fn apply_snapshot(db_sql: &[u8], skills_zip: &[u8]) -> Result<(), AppError> {
     // 先替换 skills，再导入数据库；若导入失败则回滚 skills，避免"半恢复"。
     restore_skills_zip(skills_zip)?;
 
-    if let Err(db_err) = Database::init()?.import_sql_string(sql_str) {
+    if let Err(db_err) = Database::init()?.import_sql_string_for_sync(sql_str) {
         if let Err(rollback_err) = skills_backup.restore() {
             return Err(localized(
                 "webdav.sync.db_import_and_rollback_failed",
@@ -828,17 +927,19 @@ mod tests {
     }
 
     #[test]
-    fn remote_dir_segments_uses_v2() {
+    fn remote_dir_segments_uses_current_layout() {
         let mut settings = sample_settings();
         settings.normalize();
-        let segments = remote_dir_segments(&settings);
-        assert!(
-            segments.contains(&"v2".to_string()),
-            "segments should contain v2: {segments:?}"
-        );
-        assert!(
-            !segments.contains(&"v1".to_string()),
-            "segments should not contain v1: {segments:?}"
+        let segments = remote_dir_segments(&settings, RemoteLayout::Current);
+        assert_eq!(
+            segments,
+            vec![
+                "cc switch-sync".to_string(),
+                "team a".to_string(),
+                "v2".to_string(),
+                "db-v6".to_string(),
+                "default profile".to_string(),
+            ]
         );
     }
 
@@ -846,10 +947,11 @@ mod tests {
     fn build_artifact_url_encodes_path_segments() {
         let mut settings = sample_settings();
         settings.normalize();
-        let url = build_artifact_url(&settings, REMOTE_MANIFEST).expect("build artifact url");
+        let url = build_artifact_url(&settings, RemoteLayout::Current, REMOTE_MANIFEST)
+            .expect("build artifact url");
         assert_eq!(
             url,
-            "https://dav.example.com/remote.php/dav/files/demo/cc%20switch-sync/team%20a/v2/default%20profile/manifest.json"
+            "https://dav.example.com/remote.php/dav/files/demo/cc%20switch-sync/team%20a/v2/db-v6/default%20profile/manifest.json"
         );
         assert!(
             !url.contains("//cc"),
@@ -906,43 +1008,85 @@ mod tests {
         );
     }
 
-    #[test]
-    fn validate_manifest_compat_ok() {
-        let manifest = SyncManifest {
-            format: PROTOCOL_FORMAT.to_string(),
-            version: PROTOCOL_VERSION,
+    fn manifest_with(format: &str, version: u32, db_compat_version: Option<u32>) -> SyncManifest {
+        SyncManifest {
+            format: format.to_string(),
+            version,
+            db_compat_version,
             device_name: "test".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             artifacts: BTreeMap::new(),
             snapshot_id: "id".to_string(),
-        };
-        assert!(validate_manifest_compat(&manifest).is_ok());
+        }
+    }
+
+    #[test]
+    fn validate_manifest_compat_accepts_supported_manifest() {
+        let manifest = manifest_with(PROTOCOL_FORMAT, PROTOCOL_VERSION, Some(DB_COMPAT_VERSION));
+        assert!(validate_manifest_compat(&manifest, RemoteLayout::Current).is_ok());
     }
 
     #[test]
     fn validate_manifest_compat_wrong_format() {
-        let manifest = SyncManifest {
-            format: "wrong-format".to_string(),
-            version: PROTOCOL_VERSION,
-            device_name: "test".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-            artifacts: BTreeMap::new(),
-            snapshot_id: "id".to_string(),
-        };
-        assert!(validate_manifest_compat(&manifest).is_err());
+        let manifest = manifest_with("wrong-format", PROTOCOL_VERSION, Some(DB_COMPAT_VERSION));
+        assert!(validate_manifest_compat(&manifest, RemoteLayout::Current).is_err());
     }
 
     #[test]
     fn validate_manifest_compat_wrong_version() {
-        let manifest = SyncManifest {
-            format: PROTOCOL_FORMAT.to_string(),
-            version: 999,
-            device_name: "test".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-            artifacts: BTreeMap::new(),
-            snapshot_id: "id".to_string(),
-        };
-        assert!(validate_manifest_compat(&manifest).is_err());
+        let manifest = manifest_with(PROTOCOL_FORMAT, 999, Some(DB_COMPAT_VERSION));
+        assert!(validate_manifest_compat(&manifest, RemoteLayout::Current).is_err());
+    }
+
+    #[test]
+    fn validate_manifest_compat_rejects_current_manifest_with_wrong_db_compat() {
+        let manifest = manifest_with(PROTOCOL_FORMAT, PROTOCOL_VERSION, Some(5));
+        assert!(validate_manifest_compat(&manifest, RemoteLayout::Current).is_err());
+    }
+
+    #[test]
+    fn remote_dir_segments_uses_legacy_layout() {
+        let mut settings = sample_settings();
+        settings.normalize();
+        let segments = remote_dir_segments(&settings, RemoteLayout::Legacy);
+        assert_eq!(
+            segments,
+            vec![
+                "cc switch-sync".to_string(),
+                "team a".to_string(),
+                "v2".to_string(),
+                "default profile".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_manifest_compat_accepts_legacy_manifest_without_db_compat() {
+        let manifest = manifest_with(PROTOCOL_FORMAT, PROTOCOL_VERSION, None);
+        assert!(validate_manifest_compat(&manifest, RemoteLayout::Legacy).is_ok());
+    }
+
+    #[test]
+    fn validate_manifest_compat_rejects_legacy_manifest_from_newer_db_generation() {
+        let manifest = manifest_with(
+            PROTOCOL_FORMAT,
+            PROTOCOL_VERSION,
+            Some(DB_COMPAT_VERSION + 1),
+        );
+        assert!(validate_manifest_compat(&manifest, RemoteLayout::Legacy).is_err());
+    }
+
+    #[test]
+    fn effective_db_compat_version_defaults_legacy_layout_to_v5() {
+        let manifest = manifest_with(PROTOCOL_FORMAT, PROTOCOL_VERSION, None);
+        assert_eq!(
+            effective_db_compat_version(&manifest, RemoteLayout::Legacy),
+            Some(LEGACY_DB_COMPAT_VERSION)
+        );
+        assert_eq!(
+            effective_db_compat_version(&manifest, RemoteLayout::Current),
+            None
+        );
     }
 
     #[test]
@@ -1004,6 +1148,7 @@ mod tests {
         let manifest = SyncManifest {
             format: PROTOCOL_FORMAT.to_string(),
             version: PROTOCOL_VERSION,
+            db_compat_version: Some(DB_COMPAT_VERSION),
             device_name: "My MacBook".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             artifacts: BTreeMap::new(),
@@ -1017,6 +1162,10 @@ mod tests {
         assert!(
             value.get("deviceId").is_none(),
             "manifest should not contain deviceId"
+        );
+        assert_eq!(
+            value.get("dbCompatVersion").and_then(|v| v.as_u64()),
+            Some(DB_COMPAT_VERSION as u64)
         );
     }
 }
