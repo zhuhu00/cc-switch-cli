@@ -589,7 +589,7 @@ pub mod texts {
 
     pub fn tui_help_text() -> &'static str {
         if is_chinese() {
-            "[ ]  切换应用\n←→  切换菜单/内容焦点\n↑↓  移动\n/   过滤\nEsc  返回\n?   显示/关闭帮助\n\n页面快捷键（在页面内容区顶部显示）：\n- Providers: Enter 详情，s 切换，a 添加，e 编辑，d 删除，t 测速，c 健康检查\n- Provider Detail: s 切换，e 编辑，t 测速，c 健康检查\n- MCP: x 启用/禁用(当前应用)，m 选择应用，a 添加，e 编辑，i 导入已有，d 删除\n- Prompts: Enter 查看，a 激活，x 取消激活(当前)，e 编辑，d 删除\n- Skills: Enter 详情，x 启用/禁用(当前应用)，m 选择应用，d 卸载，i 导入已有\n- Config: Enter 打开/执行，e 编辑片段\n- Settings: Enter 应用"
+            "[ ]  切换应用\n←→  切换菜单/内容焦点\n↑↓  移动\n/   过滤\nEsc  返回\n?   显示/关闭帮助\n\n页面快捷键（在页面内容区顶部显示）：\n- 供应商：Enter 详情，s 切换，a 添加，e 编辑，d 删除，t 测速，c 健康检查\n- 供应商详情：s 切换，e 编辑，t 测速，c 健康检查\n- MCP：x 启用/禁用(当前应用)，m 选择应用，a 添加，e 编辑，i 导入已有，d 删除\n- 提示词：Enter 查看，a 激活，x 取消激活(当前)，e 编辑，d 删除\n- 技能：Enter 详情，x 启用/禁用(当前应用)，m 选择应用，d 卸载，i 导入已有\n- 配置：Enter 打开/执行，e 编辑片段\n- 设置：Enter 应用"
         } else {
             "[ ]  switch app\n←→  focus menu/content\n↑↓  move\n/   filter\nEsc  back\n?   toggle help\n\nPage keys (shown at the top of each page):\n- Providers: Enter details, s switch, a add, e edit, d delete, t speedtest, c stream check\n- Provider Detail: s switch, e edit, t speedtest, c stream check\n- MCP: x toggle current, m select apps, a add, e edit, i import existing, d delete\n- Prompts: Enter view, a activate, x deactivate active, e edit, d delete\n- Skills: Enter details, x toggle current, m select apps, d uninstall, i import existing\n- Config: Enter open/run, e edit snippet\n- Settings: Enter apply"
         }
@@ -849,7 +849,7 @@ pub mod texts {
 
     pub fn tui_home_status_online() -> &'static str {
         if is_chinese() {
-            "Online"
+            "在线"
         } else {
             "Online"
         }
@@ -857,7 +857,7 @@ pub mod texts {
 
     pub fn tui_home_status_offline() -> &'static str {
         if is_chinese() {
-            "Offline"
+            "离线"
         } else {
             "Offline"
         }
@@ -1137,7 +1137,7 @@ pub mod texts {
 
     pub fn tui_label_mcp_servers_active() -> &'static str {
         if is_chinese() {
-            "Active"
+            "已启用"
         } else {
             "Active"
         }
@@ -4037,7 +4037,7 @@ pub mod texts {
     }
 
     pub fn menu_manage_mcp_variants() -> (&'static str, &'static str) {
-        ("🔌 MCP Servers", "🔌 MCP服务器")
+        ("🔌 MCP Servers", "🔌 MCP 服务器")
     }
 
     pub fn menu_manage_prompts() -> &'static str {
@@ -4128,7 +4128,7 @@ pub mod texts {
 
     pub fn skills_management() -> &'static str {
         if is_chinese() {
-            "Skills 管理"
+            "技能管理"
         } else {
             "Skills Management"
         }
