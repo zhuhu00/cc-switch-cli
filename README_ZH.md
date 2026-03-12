@@ -7,9 +7,9 @@
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**Claude Code、Codex 与 Gemini CLI 的命令行管理工具**
+**Claude Code、Codex、Gemini 与 OpenCode CLI 的命令行管理工具**
 
-统一管理 Claude Code、Codex 与 Gemini CLI 的供应商配置、MCP 服务器、Skills 扩展和系统提示词。
+统一管理 Claude Code、Codex、Gemini 与 OpenCode CLI 的供应商配置、MCP 服务器、Skills 扩展、环境检查和系统提示词。
 
 [English](README.md) | [中文](README_ZH.md)
 
@@ -79,27 +79,6 @@
   </tr>
 </table>
 
-<details>
-  <summary>旧版 UI（暂不维护）</summary>
-
-> [!WARNING]
-> 旧版交互 UI 已暂时停止维护，请以新版 TUI 为准。
-
-<table>
-  <tr>
-    <th>交互式主界面</th>
-    <th>供应商管理</th>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/main-ch.png" alt="旧版主界面" width="100%"/></td>
-    <td><img src="assets/screenshots/add-ch.png" alt="旧版供应商管理" width="100%"/></td>
-  </tr>
-</table>
-
-</details>
-
----
-
 ## 🚀 快速开始
 
 **交互模式（推荐）**
@@ -112,6 +91,9 @@ cc-switch
 ```bash
 cc-switch provider list              # 列出供应商
 cc-switch provider switch <id>       # 切换供应商
+cc-switch provider stream-check <id> # 检查供应商流式健康
+cc-switch config webdav show         # 查看 WebDAV 同步设置
+cc-switch env tools                  # 检查本地 CLI 工具
 cc-switch mcp sync                   # 同步 MCP 服务器
 
 # 使用全局 `--app` 参数来指定目标应用：
@@ -119,7 +101,7 @@ cc-switch --app claude provider list    # 管理 Claude 供应商
 cc-switch --app codex mcp sync          # 同步 Codex MCP 服务器
 cc-switch --app gemini prompts list     # 列出 Gemini 提示词
 
-# 支持的应用：`claude`（默认）、`codex`、`gemini`
+# 支持的应用：`claude`（默认）、`codex`、`gemini`、`open-code`
 ```
 
 完整命令列表请参考「功能特性」章节。
@@ -230,9 +212,9 @@ copy target\release\cc-switch.exe C:\Windows\System32\
 
 ### 🔌 供应商管理
 
-管理 **Claude Code**、**Codex** 和 **Gemini** 的 API 配置。
+管理 **Claude Code**、**Codex**、**Gemini** 与 **OpenCode** 的 API 配置。
 
-**功能：** 一键切换、多端点支持、API 密钥管理、速度测试、供应商复制。
+**功能：** 一键切换、多端点支持、API 密钥管理、速度测试、流式健康检查、远端模型发现。
 
 ```bash
 cc-switch provider list              # 列出所有供应商
@@ -243,6 +225,8 @@ cc-switch provider edit <id>         # 编辑现有供应商
 cc-switch provider duplicate <id>    # 复制供应商
 cc-switch provider delete <id>       # 删除供应商
 cc-switch provider speedtest <id>    # 测试 API 延迟
+cc-switch provider stream-check <id> # 执行流式健康检查
+cc-switch provider fetch-models <id> # 拉取远端模型列表
 ```
 
 ### 🛠️ MCP 服务器管理
@@ -301,13 +285,15 @@ cc-switch skills import-from-apps    # 导入未管理技能到 SSOT
 cc-switch skills repos list          # 查看仓库列表
 cc-switch skills repos add <repo>    # 添加仓库（owner/name[@branch] 或 GitHub URL）
 cc-switch skills repos remove <repo> # 移除仓库（owner/name 或 GitHub URL）
+cc-switch skills repos enable <repo> # 启用仓库但保留当前分支
+cc-switch skills repos disable <repo> # 禁用仓库但保留当前分支
 ```
 
 ### ⚙️ 配置管理
 
 管理配置文件的备份、导入和导出。
 
-**功能：** 自定义备份命名、交互式备份选择、自动轮换（保留 10 个）、导入/导出。
+**功能：** 自定义备份命名、交互式备份选择、自动轮换（保留 10 个）、导入/导出、通用配置片段、WebDAV 同步。
 
 ```bash
 cc-switch config show                # 显示配置
@@ -332,7 +318,26 @@ cc-switch config restore --file <path>    # 从外部文件恢复
 cc-switch config export <path>       # 导出到外部文件
 cc-switch config import <path>       # 从外部文件导入
 
+# WebDAV 同步
+cc-switch config webdav show
+cc-switch config webdav set --base-url <url> --username <user> --password <password> --enable
+cc-switch config webdav jianguoyun --username <user> --password <password>
+cc-switch config webdav check-connection
+cc-switch config webdav upload
+cc-switch config webdav download
+cc-switch config webdav migrate-v1-to-v2
+
 cc-switch config reset               # 重置为默认配置
+```
+
+### 🧪 环境与本地工具
+
+检查环境变量冲突，以及 Claude/Codex/Gemini/OpenCode CLI 是否已经装好。
+
+```bash
+cc-switch env check                  # 检查环境变量冲突
+cc-switch env list                   # 列出相关环境变量
+cc-switch env tools                  # 检查 Claude/Codex/Gemini/OpenCode CLI
 ```
 
 ### 🌐 多语言支持
@@ -426,10 +431,11 @@ cc-switch update --version v4.7.2    # 更新到指定版本
 
 <br>
 
-CC-Switch 目前支持三个 AI 编程助手：
+CC-Switch 目前支持四个 AI 编程助手：
 - **Claude Code** (`--app claude`，默认)
 - **Codex** (`--app codex`)
 - **Gemini** (`--app gemini`)
+- **OpenCode** (`--app open-code`)
 
 使用全局 `--app` 参数指定要管理的应用：
 ```bash
@@ -481,7 +487,7 @@ src-tauri/src/
 ├── cli/
 │   ├── commands/          # CLI 子命令（provider, mcp, prompts, env, skills, ...）
 │   ├── tui/               # 交互式 TUI 模式（ratatui）
-│   ├── interactive/       # 旧版交互模式
+│   ├── interactive/       # 交互入口 / TTY 检查
 │   └── ui/                # UI 实用工具（表格、颜色）
 ├── services/              # 业务逻辑（provider, mcp, prompt, webdav, ...）
 ├── database/              # SQLite 存储、迁移、备份

@@ -305,7 +305,7 @@ pub(crate) fn parse_model_ids_from_response(payload: &Value) -> Vec<String> {
     out
 }
 
-pub(super) async fn fetch_provider_models_for_tui(
+pub(crate) async fn fetch_provider_models_for_tui(
     base_url: &str,
     api_key: Option<&str>,
     strategy: ModelFetchStrategy,

@@ -15,8 +15,8 @@ use crate::app_config::AppType;
 #[command(
     name = "cc-switch",
     version,
-    about = "All-in-One Assistant for Claude Code, Codex & Gemini CLI",
-    long_about = "Unified management for Claude Code, Codex & Gemini CLI provider configurations, MCP servers, Skills extensions, and system prompts.\n\nRun without arguments to enter interactive mode."
+    about = "All-in-One Assistant for Claude Code, Codex, Gemini & OpenCode CLI",
+    long_about = "Unified management for Claude Code, Codex, Gemini, and OpenCode CLI provider configurations, MCP servers, skills, environment checks, and system prompts.\n\nRun without arguments to enter interactive mode."
 )]
 pub struct Cli {
     /// Specify the application type
@@ -33,7 +33,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Manage providers (list, add, edit, delete, switch)
+    /// Manage providers (list, switch, speedtest, stream-check, fetch-models)
     #[command(subcommand)]
     Provider(commands::provider::ProviderCommand),
 
@@ -45,11 +45,11 @@ pub enum Commands {
     #[command(subcommand)]
     Prompts(commands::prompts::PromptsCommand),
 
-    /// Manage skills (list, install, uninstall)
+    /// Manage skills and skill repositories
     #[command(subcommand)]
     Skills(commands::skills::SkillsCommand),
 
-    /// Manage configuration (export, import, backup, restore)
+    /// Manage configuration, backups, common snippets, and WebDAV sync
     #[command(subcommand)]
     Config(commands::config::ConfigCommand),
 
@@ -57,7 +57,7 @@ pub enum Commands {
     #[command(subcommand)]
     Proxy(commands::proxy::ProxyCommand),
 
-    /// Manage environment variables
+    /// Manage environment variables and local CLI tool checks
     #[command(subcommand)]
     Env(commands::env::EnvCommand),
 
@@ -148,6 +148,131 @@ mod tests {
         match cli.command {
             Some(Commands::Proxy(super::commands::proxy::ProxyCommand::Disable)) => {}
             _ => panic!("expected proxy disable command"),
+        }
+    }
+
+    #[test]
+    fn parses_provider_stream_check_subcommand() {
+        let cli = Cli::parse_from(["cc-switch", "provider", "stream-check", "demo"]);
+
+        match cli.command {
+            Some(Commands::Provider(super::commands::provider::ProviderCommand::StreamCheck {
+                id,
+            })) => {
+                assert_eq!(id, "demo");
+            }
+            _ => panic!("expected provider stream-check command"),
+        }
+    }
+
+    #[test]
+    fn parses_provider_fetch_models_subcommand() {
+        let cli = Cli::parse_from(["cc-switch", "provider", "fetch-models", "demo"]);
+
+        match cli.command {
+            Some(Commands::Provider(super::commands::provider::ProviderCommand::FetchModels {
+                id,
+            })) => {
+                assert_eq!(id, "demo");
+            }
+            _ => panic!("expected provider fetch-models command"),
+        }
+    }
+
+    #[test]
+    fn parses_config_webdav_show_subcommand() {
+        let cli = Cli::parse_from(["cc-switch", "config", "webdav", "show"]);
+
+        match cli.command {
+            Some(Commands::Config(super::commands::config::ConfigCommand::WebDav(
+                super::commands::config_webdav::WebDavCommand::Show,
+            ))) => {}
+            _ => panic!("expected config webdav show command"),
+        }
+    }
+
+    #[test]
+    fn parses_config_webdav_set_subcommand() {
+        let cli = Cli::parse_from([
+            "cc-switch",
+            "config",
+            "webdav",
+            "set",
+            "--base-url",
+            "https://dav.example.com/root",
+            "--username",
+            "demo",
+            "--password",
+            "secret",
+            "--enable",
+        ]);
+
+        match cli.command {
+            Some(Commands::Config(super::commands::config::ConfigCommand::WebDav(
+                super::commands::config_webdav::WebDavCommand::Set {
+                    base_url,
+                    username,
+                    password,
+                    enable,
+                    ..
+                },
+            ))) => {
+                assert_eq!(base_url.as_deref(), Some("https://dav.example.com/root"));
+                assert_eq!(username.as_deref(), Some("demo"));
+                assert_eq!(password.as_deref(), Some("secret"));
+                assert!(enable);
+            }
+            _ => panic!("expected config webdav set command"),
+        }
+    }
+
+    #[test]
+    fn parses_config_webdav_check_connection_subcommand() {
+        let cli = Cli::parse_from(["cc-switch", "config", "webdav", "check-connection"]);
+
+        match cli.command {
+            Some(Commands::Config(super::commands::config::ConfigCommand::WebDav(
+                super::commands::config_webdav::WebDavCommand::CheckConnection,
+            ))) => {}
+            _ => panic!("expected config webdav check-connection command"),
+        }
+    }
+
+    #[test]
+    fn parses_env_tools_subcommand() {
+        let cli = Cli::parse_from(["cc-switch", "env", "tools"]);
+
+        match cli.command {
+            Some(Commands::Env(super::commands::env::EnvCommand::Tools)) => {}
+            _ => panic!("expected env tools command"),
+        }
+    }
+
+    #[test]
+    fn parses_skills_repo_enable_subcommand() {
+        let cli = Cli::parse_from(["cc-switch", "skills", "repos", "enable", "foo/bar"]);
+
+        match cli.command {
+            Some(Commands::Skills(super::commands::skills::SkillsCommand::Repos(
+                super::commands::skills::SkillReposCommand::Enable { url },
+            ))) => {
+                assert_eq!(url, "foo/bar");
+            }
+            _ => panic!("expected skills repos enable command"),
+        }
+    }
+
+    #[test]
+    fn parses_skills_repo_disable_subcommand() {
+        let cli = Cli::parse_from(["cc-switch", "skills", "repos", "disable", "foo/bar"]);
+
+        match cli.command {
+            Some(Commands::Skills(super::commands::skills::SkillsCommand::Repos(
+                super::commands::skills::SkillReposCommand::Disable { url },
+            ))) => {
+                assert_eq!(url, "foo/bar");
+            }
+            _ => panic!("expected skills repos disable command"),
         }
     }
 }

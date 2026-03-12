@@ -2,6 +2,7 @@ use crate::app_config::AppType;
 use crate::cli::ui::{create_table, error, highlight, info, success};
 use crate::error::AppError;
 use crate::services::env_checker;
+use crate::services::local_env_check::{check_local_environment, ToolCheckStatus};
 use clap::Subcommand;
 
 #[derive(Subcommand)]
@@ -10,6 +11,8 @@ pub enum EnvCommand {
     Check,
     /// List all relevant environment variables
     List,
+    /// Check whether Claude/Codex/Gemini/OpenCode CLIs are installed locally
+    Tools,
 }
 
 pub fn execute(cmd: EnvCommand, app: Option<AppType>) -> Result<(), AppError> {
@@ -18,6 +21,7 @@ pub fn execute(cmd: EnvCommand, app: Option<AppType>) -> Result<(), AppError> {
     match cmd {
         EnvCommand::Check => check_conflicts(app_type),
         EnvCommand::List => list_env_vars(app_type),
+        EnvCommand::Tools => check_local_tools(),
     }
 }
 
@@ -127,4 +131,54 @@ fn list_env_vars(app_type: AppType) -> Result<(), AppError> {
     println!("{}", table);
 
     Ok(())
+}
+
+fn check_local_tools() -> Result<(), AppError> {
+    let results = check_local_environment();
+
+    println!("\n{}", highlight("Local CLI Tools"));
+    println!("{}", "═".repeat(60));
+
+    let mut table = create_table();
+    table.set_header(vec!["Tool", "Status"]);
+    for result in results {
+        table.add_row(vec![
+            result.display_name.to_string(),
+            tool_status_summary(&result.status),
+        ]);
+    }
+
+    println!("{}", table);
+
+    Ok(())
+}
+
+fn tool_status_summary(status: &ToolCheckStatus) -> String {
+    match status {
+        ToolCheckStatus::Ok { version } => format!("ok ({version})"),
+        ToolCheckStatus::NotInstalledOrNotExecutable => "not installed".to_string(),
+        ToolCheckStatus::Error { message } => format!("error ({message})"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_status_summary;
+    use crate::services::local_env_check::ToolCheckStatus;
+
+    #[test]
+    fn tool_status_summary_formats_ok_version() {
+        let summary = tool_status_summary(&ToolCheckStatus::Ok {
+            version: "1.2.3".to_string(),
+        });
+
+        assert_eq!(summary, "ok (1.2.3)");
+    }
+
+    #[test]
+    fn tool_status_summary_formats_missing_tool() {
+        let summary = tool_status_summary(&ToolCheckStatus::NotInstalledOrNotExecutable);
+
+        assert_eq!(summary, "not installed");
+    }
 }

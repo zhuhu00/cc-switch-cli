@@ -280,43 +280,19 @@ pub mod texts {
         }
     }
 
-    pub fn main_menu_help() -> &'static str {
-        if is_chinese() {
-            "↑↓ 选择，←→ 切换应用，/ 搜索，Enter 确认，Esc 清除/退出"
-        } else {
-            "↑↓ to move, ←→ to switch app, / to search, Enter to select, Esc to clear/exit"
-        }
-    }
-
-    pub fn main_menu_search_prompt() -> &'static str {
-        if is_chinese() {
-            "输入搜索关键字（空或 Esc 清除过滤）："
-        } else {
-            "Enter search keyword (empty/Esc to clear):"
-        }
-    }
-
-    pub fn main_menu_filtering(query: &str) -> String {
-        if is_chinese() {
-            format!("🔎 搜索: {}", query)
-        } else {
-            format!("🔎 Search: {}", query)
-        }
-    }
-
-    pub fn main_menu_no_matches() -> &'static str {
-        if is_chinese() {
-            "没有匹配的菜单项"
-        } else {
-            "No matching menu items"
-        }
-    }
-
     pub fn interactive_requires_tty() -> &'static str {
         if is_chinese() {
             "交互模式需要在 TTY 终端中运行（请不要通过管道/重定向调用）。"
         } else {
             "Interactive mode requires a TTY (do not run with pipes/redirection)."
+        }
+    }
+
+    pub fn interactive_legacy_tui_removed() -> &'static str {
+        if is_chinese() {
+            "旧版 legacy TUI 已移除，请直接使用当前默认的交互 TUI。"
+        } else {
+            "The legacy TUI has been removed. Please use the default interactive TUI instead."
         }
     }
 
@@ -4101,23 +4077,6 @@ pub mod texts {
 
     pub fn menu_manage_skills_variants() -> (&'static str, &'static str) {
         ("🧩 Skills", "🧩 技能")
-    }
-
-    // Legacy interactive menu item (not used in ratatui TUI navigation).
-    pub fn menu_view_config() -> &'static str {
-        if is_chinese() {
-            "👁️ 查看当前配置"
-        } else {
-            "👁️ View Current Configuration"
-        }
-    }
-
-    pub fn menu_switch_app() -> &'static str {
-        if is_chinese() {
-            "🔄 切换应用"
-        } else {
-            "🔄 Switch Application"
-        }
     }
 
     pub fn menu_settings() -> &'static str {

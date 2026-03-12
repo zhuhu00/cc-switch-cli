@@ -10,8 +10,11 @@ pub(crate) use handlers::{
 };
 #[cfg(test)]
 pub(crate) use types::{
-    build_model_fetch_candidate_urls, build_stream_check_result_lines,
-    model_fetch_strategy_for_field, parse_model_ids_from_response, ModelFetchStrategy, UpdateMsg,
+    build_model_fetch_candidate_urls, model_fetch_strategy_for_field,
+    parse_model_ids_from_response, UpdateMsg,
+};
+pub(crate) use types::{
+    build_stream_check_result_lines, fetch_provider_models_for_tui, ModelFetchStrategy,
 };
 pub(crate) use types::{
     next_model_fetch_request_id, LocalEnvReq, ModelFetchReq, ProxyReq, RequestTracker, SkillsReq,

@@ -7,9 +7,9 @@
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**Command-Line Management Tool for Claude Code, Codex & Gemini CLI**
+**Command-Line Management Tool for Claude Code, Codex, Gemini & OpenCode CLI**
 
-Unified management for Claude Code, Codex & Gemini CLI provider configurations, MCP servers, Skills extensions, and system prompts.
+Unified management for Claude Code, Codex, Gemini, and OpenCode CLI provider configurations, MCP servers, skills, environment checks, and system prompts.
 
 [English](README.md) | [中文](README_ZH.md)
 
@@ -77,27 +77,6 @@ This project is a **CLI fork** of [CC-Switch](https://github.com/farion1231/cc-s
   </tr>
 </table>
 
-<details>
-  <summary>Legacy UI (no longer actively maintained)</summary>
-
-> [!WARNING]
-> The legacy interactive UI is temporarily not maintained. Please use the new TUI.
-
-<table>
-  <tr>
-    <th>Interactive Main Menu</th>
-    <th>Provider Management</th>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/main-en.png" alt="Legacy Main Menu" width="100%"/></td>
-    <td><img src="assets/screenshots/add-en.png" alt="Legacy Provider Management" width="100%"/></td>
-  </tr>
-</table>
-
-</details>
-
----
-
 ## 🚀 Quick Start
 
 **Interactive Mode (Recommended)**
@@ -110,6 +89,9 @@ cc-switch
 ```bash
 cc-switch provider list              # List providers
 cc-switch provider switch <id>       # Switch provider
+cc-switch provider stream-check <id> # Check provider stream health
+cc-switch config webdav show         # Inspect WebDAV sync settings
+cc-switch env tools                  # Check local CLI tools
 cc-switch mcp sync                   # Sync MCP servers
 
 # Use the global `--app` flag to target specific applications:
@@ -117,7 +99,7 @@ cc-switch --app claude provider list    # Manage Claude providers
 cc-switch --app codex mcp sync          # Sync Codex MCP servers
 cc-switch --app gemini prompts list     # List Gemini prompts
 
-# Supported apps: `claude` (default), `codex`, `gemini`
+# Supported apps: `claude` (default), `codex`, `gemini`, `open-code`
 ```
 
 See the "Features" section for full command list.
@@ -228,9 +210,9 @@ copy target\release\cc-switch.exe C:\Windows\System32\
 
 ### 🔌 Provider Management
 
-Manage API configurations for **Claude Code**, **Codex**, and **Gemini**.
+Manage API configurations for **Claude Code**, **Codex**, **Gemini**, and **OpenCode**.
 
-**Features:** One-click switching, multi-endpoint support, API key management, speed testing, provider duplication.
+**Features:** One-click switching, multi-endpoint support, API key management, speed testing, stream health checks, remote model discovery.
 
 ```bash
 cc-switch provider list              # List all providers
@@ -241,6 +223,8 @@ cc-switch provider edit <id>         # Edit existing provider
 cc-switch provider duplicate <id>    # Duplicate a provider
 cc-switch provider delete <id>       # Delete provider
 cc-switch provider speedtest <id>    # Test API latency
+cc-switch provider stream-check <id> # Run stream health check
+cc-switch provider fetch-models <id> # Fetch remote model list
 ```
 
 ### 🛠️ MCP Server Management
@@ -299,13 +283,15 @@ cc-switch skills import-from-apps    # Import unmanaged skills into SSOT
 cc-switch skills repos list          # List skill repositories
 cc-switch skills repos add <repo>    # Add repo (owner/name[@branch] or GitHub URL)
 cc-switch skills repos remove <repo> # Remove repo (owner/name or GitHub URL)
+cc-switch skills repos enable <repo> # Enable repo without changing branch
+cc-switch skills repos disable <repo> # Disable repo without changing branch
 ```
 
 ### ⚙️ Configuration Management
 
 Manage configuration backups, imports, and exports.
 
-**Features:** Custom backup naming, interactive backup selection, automatic rotation (keep 10), import/export.
+**Features:** Custom backup naming, interactive backup selection, automatic rotation (keep 10), import/export, common snippets, WebDAV sync.
 
 ```bash
 cc-switch config show                # Display configuration
@@ -330,7 +316,26 @@ cc-switch config restore --file <path>    # Restore from external file
 cc-switch config export <path>       # Export to external file
 cc-switch config import <path>       # Import from external file
 
+# WebDAV sync
+cc-switch config webdav show
+cc-switch config webdav set --base-url <url> --username <user> --password <password> --enable
+cc-switch config webdav jianguoyun --username <user> --password <password>
+cc-switch config webdav check-connection
+cc-switch config webdav upload
+cc-switch config webdav download
+cc-switch config webdav migrate-v1-to-v2
+
 cc-switch config reset               # Reset to default configuration
+```
+
+### 🧪 Environment & Local Tools
+
+Inspect environment conflicts and whether required local CLIs are installed.
+
+```bash
+cc-switch env check                  # Check environment conflicts
+cc-switch env list                   # List relevant environment variables
+cc-switch env tools                  # Check Claude/Codex/Gemini/OpenCode CLIs
 ```
 
 ### 🌐 Multi-language Support
@@ -424,10 +429,11 @@ This is usually caused by **environment variable conflicts**. If you have API ke
 
 <br>
 
-CC-Switch currently supports three AI coding assistants:
+CC-Switch currently supports four AI coding assistants:
 - **Claude Code** (`--app claude`, default)
 - **Codex** (`--app codex`)
 - **Gemini** (`--app gemini`)
+- **OpenCode** (`--app open-code`)
 
 Use the global `--app` flag to specify which app to manage:
 ```bash
@@ -479,7 +485,7 @@ src-tauri/src/
 ├── cli/
 │   ├── commands/          # CLI subcommands (provider, mcp, prompts, env, skills, ...)
 │   ├── tui/               # Interactive TUI mode (ratatui)
-│   ├── interactive/       # Legacy interactive mode
+│   ├── interactive/       # Interactive entrypoint / TTY gate
 │   └── ui/                # UI utilities (tables, colors)
 ├── services/              # Business logic (provider, mcp, prompt, webdav, ...)
 ├── database/              # SQLite storage, migrations, backup

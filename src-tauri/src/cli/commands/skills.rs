@@ -76,6 +76,16 @@ pub enum SkillReposCommand {
         /// Repository (GitHub URL or owner/name)
         url: String,
     },
+    /// Enable a repository without changing its branch
+    Enable {
+        /// Repository (GitHub URL or owner/name)
+        url: String,
+    },
+    /// Disable a repository without changing its branch
+    Disable {
+        /// Repository (GitHub URL or owner/name)
+        url: String,
+    },
 }
 
 pub fn execute(cmd: SkillsCommand, app: Option<AppType>) -> Result<(), AppError> {
@@ -261,6 +271,8 @@ fn execute_repos(cmd: SkillReposCommand) -> Result<(), AppError> {
         SkillReposCommand::List => list_repos(),
         SkillReposCommand::Add { url } => add_repo(&url),
         SkillReposCommand::Remove { url } => remove_repo(&url),
+        SkillReposCommand::Enable { url } => set_repo_enabled(&url, true),
+        SkillReposCommand::Disable { url } => set_repo_enabled(&url, false),
     }
 }
 
@@ -297,6 +309,34 @@ fn remove_repo(_url: &str) -> Result<(), AppError> {
     SkillService::remove_repo(&repo.owner, &repo.name)?;
     println!("{}", success("✓ Repository removed."));
     Ok(())
+}
+
+fn set_repo_enabled(url: &str, enabled: bool) -> Result<(), AppError> {
+    let repo = parse_repo_spec(url)?;
+    let existing = SkillService::list_repos()?
+        .into_iter()
+        .find(|candidate| candidate.owner == repo.owner && candidate.name == repo.name)
+        .ok_or_else(|| {
+            AppError::Message(format!(
+                "Repository not found: {}/{}",
+                repo.owner, repo.name
+            ))
+        })?;
+
+    SkillService::upsert_repo(repo_with_enabled(existing, enabled))?;
+    println!(
+        "{}",
+        success(&format!(
+            "✓ Repository {}.",
+            if enabled { "enabled" } else { "disabled" }
+        ))
+    );
+    Ok(())
+}
+
+fn repo_with_enabled(mut repo: SkillRepo, enabled: bool) -> SkillRepo {
+    repo.enabled = enabled;
+    repo
 }
 
 fn sync_method(method: Option<SyncMethod>) -> Result<(), AppError> {
@@ -351,4 +391,47 @@ fn parse_repo_spec(raw: &str) -> Result<SkillRepo, AppError> {
         branch: branch.unwrap_or("main").to_string(),
         enabled: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_repo_spec, repo_with_enabled};
+    use crate::services::skill::SkillRepo;
+
+    #[test]
+    fn parse_repo_spec_supports_plain_owner_repo() {
+        let repo = parse_repo_spec("foo/bar").expect("plain owner/repo should parse");
+
+        assert_eq!(repo.owner, "foo");
+        assert_eq!(repo.name, "bar");
+        assert_eq!(repo.branch, "main");
+        assert!(repo.enabled);
+    }
+
+    #[test]
+    fn parse_repo_spec_supports_branch_suffix() {
+        let repo = parse_repo_spec("foo/bar@dev").expect("branch suffix should parse");
+
+        assert_eq!(repo.owner, "foo");
+        assert_eq!(repo.name, "bar");
+        assert_eq!(repo.branch, "dev");
+        assert!(repo.enabled);
+    }
+
+    #[test]
+    fn repo_with_enabled_preserves_branch_and_identity() {
+        let repo = SkillRepo {
+            owner: "foo".to_string(),
+            name: "bar".to_string(),
+            branch: "release".to_string(),
+            enabled: true,
+        };
+
+        let updated = repo_with_enabled(repo, false);
+
+        assert_eq!(updated.owner, "foo");
+        assert_eq!(updated.name, "bar");
+        assert_eq!(updated.branch, "release");
+        assert!(!updated.enabled);
+    }
 }

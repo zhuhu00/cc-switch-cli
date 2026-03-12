@@ -30,13 +30,14 @@ use runtime_actions::{
 use runtime_skills::{
     finish_skills_import_with, open_skills_import_picker_with, scan_unmanaged_skills_with,
 };
+pub(crate) use runtime_systems::build_stream_check_result_lines;
 #[cfg(test)]
 use runtime_systems::{
-    apply_webdav_jianguoyun_quick_setup, build_model_fetch_candidate_urls,
-    build_stream_check_result_lines, drain_latest_webdav_req, model_fetch_strategy_for_field,
-    parse_model_ids_from_response, update_webdav_last_error_with, ModelFetchStrategy, ProxyReq,
-    UpdateMsg, WebDavReq, WebDavReqKind,
+    apply_webdav_jianguoyun_quick_setup, build_model_fetch_candidate_urls, drain_latest_webdav_req,
+    model_fetch_strategy_for_field, parse_model_ids_from_response, update_webdav_last_error_with,
+    ProxyReq, UpdateMsg, WebDavReq, WebDavReqKind,
 };
+pub(crate) use runtime_systems::{fetch_provider_models_for_tui, ModelFetchStrategy};
 use runtime_systems::{
     handle_local_env_msg, handle_model_fetch_msg, handle_proxy_msg, handle_skills_msg,
     handle_speedtest_msg, handle_stream_check_msg, handle_update_msg, handle_webdav_msg,
